@@ -84,8 +84,10 @@ class TestEdges(unittest.TestCase):
                   '</track></audio></media></sequence></xmeml>').encode()
             p=Project(cxml)
             locate_media(p,str(newdir))
-            self.assertEqual(p.groups[0].path,str(good))
-            self.assertIn(good.as_uri().encode(),p.to_xml())
+            # macOS aliases /var/... to /private/var/..., which are the same file.
+            # Verify the resolved identity rather than the textual spelling.
+            self.assertEqual(Path(p.groups[0].path).resolve(), good.resolve())
+            self.assertIn(Path(p.groups[0].path).as_uri().encode(),p.to_xml())
 
     def test_ntsc_fps(self):
         p=Project(b'<xmeml version="5"><sequence><rate><timebase>30</timebase><ntsc>TRUE</ntsc></rate><media><video><track><clipitem id="x"><start>0</start><end>300</end><in>0</in><out>300</out><file><pathurl>file:///tmp/demo.mov</pathurl></file></clipitem></track></video></media></sequence></xmeml>')
