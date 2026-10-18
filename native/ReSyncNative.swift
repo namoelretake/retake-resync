@@ -1,5 +1,6 @@
 import AppKit
 import WebKit
+import Sparkle
 
 // Native macOS window; the existing Python synchronizer runs on 127.0.0.1 only.
 
@@ -20,6 +21,7 @@ final class ReSyncAppDelegate: NSObject, NSApplicationDelegate, WKNavigationDele
     private var endpoint: URL?
     private var outputBuffer = ""
     private var closing = false
+    private var updaterController: SPUStandardUpdaterController?
 
     private var bundleRoot: URL {
         if let root = ProcessInfo.processInfo.environment["RESYNC_BUNDLE_ROOT"] {
@@ -92,7 +94,35 @@ final class ReSyncAppDelegate: NSObject, NSApplicationDelegate, WKNavigationDele
 
         window.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
+        configureUpdater()
         startBackend()
+    }
+
+    // Sparkle manages downloading, cryptographic verification, replacement
+    // and restart. It is intentionally disabled until the release feed and
+    // EdDSA public key have been configured for this app bundle.
+    private func configureUpdater() {
+        guard let key = Bundle.main.object(forInfoDictionaryKey: "SUPublicEDKey") as? String,
+              !key.isEmpty,
+              let feed = Bundle.main.object(forInfoDictionaryKey: "SUFeedURL") as? String,
+              let url = URL(string: feed), url.scheme == "https" else { return }
+        updaterController = SPUStandardUpdaterController(
+            startingUpdater: true,
+            updaterDelegate: nil,
+            userDriverDelegate: nil
+        )
+    }
+
+    private func checkForUpdates() {
+        guard let controller = updaterController else {
+            let alert = NSAlert()
+            alert.messageText = "Atualizações em preparação"
+            alert.informativeText = "O verificador já está integrado ao ReSync, mas falta configurar o canal de versões assinadas no GitHub. O aplicativo continuará funcionando normalmente."
+            alert.addButton(withTitle: "OK")
+            alert.beginSheetModal(for: window)
+            return
+        }
+        controller.checkForUpdates(nil)
     }
 
     private func startBackend() {
@@ -185,8 +215,14 @@ final class ReSyncAppDelegate: NSObject, NSApplicationDelegate, WKNavigationDele
     }
 
     func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
-        guard message.name == "resync", let body = message.body as? [String: Any],
-              let action = body["action"] as? String, action == "save",
+        guard message.name == "resync",
+              let body = message.body as? [String: Any],
+              let action = body["action"] as? String else { return }
+        if action == "checkUpdates" {
+            checkForUpdates()
+            return
+        }
+        guard action == "save",
               let route = body["route"] as? String,
               route == "/api/download" || route == "/api/csv",
               let endpoint = endpoint else { return }

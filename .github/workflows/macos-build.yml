@@ -9,6 +9,14 @@ on:
       - 'build/**'
       - 'assets/**'
       - '.github/workflows/macos-build.yml'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'native/**'
+      - 'source/index.html'
+      - 'build/**'
+      - 'assets/**'
+      - '.github/workflows/macos-build.yml'
   workflow_dispatch:
 
 permissions:
@@ -43,12 +51,16 @@ jobs:
       - name: Compilar aplicativo experimental
         env:
           CI: 'true'
+          SPARKLE_PUBLIC_ED_KEY: ${{ secrets.SPARKLE_PUBLIC_ED_KEY }}
         run: bash 'build/Criar ReSync Completo.command'
       - name: Validar estrutura do aplicativo gerado
         run: |
           test -x saida/ReSync.app/Contents/MacOS/ReSync
           test -x saida/ReSync.app/Contents/Resources/backend/resync-server/resync-server
           test -x saida/ReSync.app/Contents/Resources/bin/ffmpeg
+          test -d saida/ReSync.app/Contents/Frameworks/Sparkle.framework
+          otool -L saida/ReSync.app/Contents/MacOS/ReSync | grep Sparkle
+          /usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" saida/ReSync.app/Contents/Info.plist
           ls -lh saida/ReSync-macOS.dmg || true
       - name: Disponibilizar artefatos não assinados
         uses: actions/upload-artifact@v4

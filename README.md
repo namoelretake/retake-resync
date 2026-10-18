@@ -1,35 +1,55 @@
 # ReSync — by Retake
 
-ReSync é um aplicativo para sincronização multicâmera por áudio, usando XML do Final Cut Pro 7 para importar e exportar sequências no Adobe Premiere Pro.
+Sincronização multicâmera por áudio para editores de vídeo. Importa e exporta **Final Cut Pro 7 XML** compatível com fluxos de trabalho do Adobe Premiere Pro.
 
-**Versão-base:** 0.6.1 Beta. Código privado. A versão 0.6.2 (tentativa de melhoria com WAVs independentes) não foi considerada estável.
+## ReSync para macOS
 
-## Componentes
+O aplicativo utiliza uma janela nativa AppKit + WebKit, com motor Python e FFmpeg empacotados. Você pode sincronizar takes de múltiplas câmeras sem depender do navegador ou abrir o Terminal para usar o aplicativo.
 
-- `source/engine.py`: algoritmo de sincronização e exportação XML.
-- `source/app.py` e `source/index.html`: interface e processamento local.
-- `source/tests/`: testes automatizados.
-- `native/ReSyncNative.swift`: janela do aplicativo macOS (AppKit/WebKit).
-- `build/`: compilação do aplicativo e DMG.
-- `assets/`: ícones do aplicativo.
+**Base do sincronizador:** versão 0.6.1. A versão experimental 0.6.2 não foi incorporada à base devido a problemas identificados com WAVs avulsos. A versão do aplicativo 0.6.3 adiciona a estrutura do atualizador, mas não modifica o algoritmo principal de sincronização.
 
-## Executar os testes
+## Código
+
+- `source/engine.py` — áudio, correlação, organização e exportação XML.
+- `source/app.py`, `source/index.html` — interface local e endpoints de processamento.
+- `source/tests/` — testes automatizados.
+- `native/ReSyncNative.swift` — janela macOS e ponte com Sparkle.
+- `build/` — compilação, empacotamento e geração de feed de atualização.
+- `assets/` — ícone e demais recursos.
+
+## Testes
+
+No ambiente com Python 3 e FFmpeg no PATH:
 
 ```bash
 python3 -m pip install -r source/requirements.txt
 python3 -m unittest discover -s source/tests -p 'test_*.py' -q
 ```
 
-## Construir o app
+## Compilação
 
-No macOS, com Python 3 e Apple Command Line Tools, executar `Gerar aplicativo independente.command`. O script prepara um pacote local `saida/ReSync.app` e tenta criar `saida/ReSync-macOS.dmg`.
+No macOS, com Swift e Python 3.10+ disponíveis:
 
-O aplicativo final ainda precisa ser compilado e validado em macOS, assinado e notarizado para distribuição profissional.
+```bash
+bash 'Gerar aplicativo independente.command'
+```
 
-## Problemas conhecidos
+Os arquivos são gerados na pasta `saida/`. O pipeline manual de GitHub Actions em `.github/workflows/macos-build.yml` também gera um aplicativo de teste não notarizado.
 
-- Alguns WAVs de áudio final, sem vídeo vinculado, não sincronizam adequadamente no material real da Retake.
-- Verifique o XML exportado em uma cópia do projeto do Premiere.
-- **Atualização automática do app ainda não está implementada.** GitHub Actions prepara apenas testes e compilação, não instala atualizações no Mac.
+## Atualizações automáticas
 
-**Privacidade:** não envie materiais originais de clientes a este repositório.
+A partir da versão 0.6.3, o ReSync inclui **Preferências → Buscar atualizações** usando Sparkle. O pacote só consegue instalar atualizações quando existe uma chave EdDSA pública incorporada ao app e uma versão mais nova publicada em GitHub Releases com assinatura correspondente.
+
+Veja [a preparação e publicação do canal de atualizações](docs/ATUALIZACOES.md).
+
+## Limitações atuais
+
+- A correspondência com determinados WAVs finalizados sem vídeo vinculado ainda não está validada para todos os materiais reais.
+- É recomendado conferir a sequência XML em uma cópia do projeto Premiere antes de usar em produção.
+- Versões sem Apple Developer ID e notarização podem exigir autorização manual do macOS.
+
+## Licenciamento e privacidade
+
+A disponibilização pública deste código não representa, por si só, uma concessão de licença para redistribuição. Licenças de componentes como FFmpeg e Sparkle devem ser respeitadas na publicação de instaladores.
+
+Os vídeos e áudios são processados localmente. Não envie material de clientes ao repositório.

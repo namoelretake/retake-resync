@@ -1,0 +1,97 @@
+name: ReSync — publicar atualização macOS
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_notes:
+        description: "O que mudou nesta versão?"
+        required: false
+        type: string
+        default: "Melhorias e correções do ReSync."
+
+permissions:
+  contents: write
+
+concurrency:
+  group: resync-release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    if: github.ref == 'refs/heads/main'
+    runs-on: macos-15
+    timeout-minutes: 50
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Verificar canal público e chaves configuradas
+        env:
+          PUBLIC_KEY: ${{ secrets.SPARKLE_PUBLIC_ED_KEY }}
+          PRIVATE_KEY: ${{ secrets.SPARKLE_PRIVATE_ED_KEY }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          test -n "$PUBLIC_KEY" || { echo "::error::Cadastre SPARKLE_PUBLIC_ED_KEY nos Actions secrets."; exit 1; }
+          test -n "$PRIVATE_KEY" || { echo "::error::Cadastre SPARKLE_PRIVATE_ED_KEY nos Actions secrets."; exit 1; }
+          python3 -c 'import base64,os; assert len(base64.b64decode(os.environ["PUBLIC_KEY"],validate=True)) == 32, "A chave pública EdDSA deve ter 32 bytes."'
+          visibility=$(gh api repos/"$GITHUB_REPOSITORY" --jq '.visibility')
+          test "$visibility" = "public" || { echo "::error::Torne o repositório público antes de publicar uma atualização."; exit 1; }
+      - name: Instalar dependências
+        run: |
+          python3 -m pip install -r source/requirements.txt
+          python3 -m pip install 'imageio-ffmpeg>=0.5,<1'
+          mkdir -p "$RUNNER_TEMP/resync-bin"
+          ln -sf "$(python3 -c 'import imageio_ffmpeg;print(imageio_ffmpeg.get_ffmpeg_exe())')" "$RUNNER_TEMP/resync-bin/ffmpeg"
+          echo "$RUNNER_TEMP/resync-bin" >> "$GITHUB_PATH"
+      - name: Testar sincronização
+        run: python3 -m unittest discover -s source/tests -p 'test_*.py' -q
+      - name: Gerar aplicativo independente com Sparkle
+        env:
+          CI: 'true'
+          SPARKLE_PUBLIC_ED_KEY: ${{ secrets.SPARKLE_PUBLIC_ED_KEY }}
+        run: bash 'build/Criar ReSync Completo.command'
+      - name: Empacotar e assinar a atualização
+        env:
+          SPARKLE_PRIVATE_ED_KEY: ${{ secrets.SPARKLE_PRIVATE_ED_KEY }}
+        run: |
+          set -euo pipefail
+          test "$(uname -m)" = "arm64"
+          APP="saida/ReSync.app"
+          PLIST="$APP/Contents/Info.plist"
+          VERSION=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$PLIST")
+          BUILD=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$PLIST")
+          test -n "$(/usr/libexec/PlistBuddy -c 'Print :SUPublicEDKey' "$PLIST")"
+          FEED=$(/usr/libexec/PlistBuddy -c 'Print :SUFeedURL' "$PLIST")
+          test "$FEED" = "https://github.com/namoelretake/retake-resync/releases/latest/download/appcast.xml"
+          TAG="v$VERSION"
+          ARCHIVE="saida/ReSync-${VERSION}-macOS-arm64.zip"
+          ditto -c -k --sequesterRsrc --keepParent "$APP" "$ARCHIVE"
+          KEY_FILE="$RUNNER_TEMP/.resync-sparkle-signing-key"
+          trap 'rm -f "$KEY_FILE"' EXIT
+          (umask 077; printf '%s' "$SPARKLE_PRIVATE_ED_KEY" > "$KEY_FILE")
+          SIGNER="$GITHUB_WORKSPACE/.build-temp/Sparkle/bin/sign_update"
+          test -x "$SIGNER"
+          SIGNATURE=$("$SIGNER" -p -f "$KEY_FILE" "$ARCHIVE")
+          URL="https://github.com/$GITHUB_REPOSITORY/releases/download/$TAG/$(basename "$ARCHIVE")"
+          python3 build/create_appcast.py --version "$VERSION" --build "$BUILD" \
+            --archive "$ARCHIVE" --signature "$SIGNATURE" --url "$URL" \
+            --output saida/appcast.xml
+          echo "RESYNC_VERSION=$VERSION" >> "$GITHUB_ENV"
+          echo "RESYNC_ZIP=$ARCHIVE" >> "$GITHUB_ENV"
+          echo "RESYNC_TAG=$TAG" >> "$GITHUB_ENV"
+          codesign --verify --deep --strict --verbose=2 "$APP"
+      - name: Publicar GitHub Release e appcast
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_NOTES: ${{ inputs.release_notes }}
+        run: |
+          set -euo pipefail
+          if gh release view "$RESYNC_TAG" >/dev/null 2>&1; then
+            echo "::error::Release $RESYNC_TAG já existe. Aumente a versão antes de publicar outra."
+            exit 1
+          fi
+          gh release create "$RESYNC_TAG" \
+            "$RESYNC_ZIP" saida/ReSync-macOS.dmg saida/appcast.xml \
+            --target "$GITHUB_SHA" --title "ReSync $RESYNC_VERSION" \
+            --notes "$RELEASE_NOTES" --latest
