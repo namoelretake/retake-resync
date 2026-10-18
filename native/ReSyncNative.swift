@@ -2,6 +2,16 @@ import AppKit
 import WebKit
 
 // Native macOS window; the existing Python synchronizer runs on 127.0.0.1 only.
+
+// WKWebView fills the transparent titlebar and consumes mouse events.
+// A real AppKit overlay is needed for a reliable draggable header.
+final class ReSyncWindowDragHandle: NSView {
+    override var isOpaque: Bool { false }
+
+    override func mouseDown(with event: NSEvent) {
+        window?.performDrag(with: event)
+    }
+}
 final class ReSyncAppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, WKScriptMessageHandler {
     private var window: NSWindow!
     private var webView: WKWebView!
@@ -64,6 +74,22 @@ final class ReSyncAppDelegate: NSObject, NSApplicationDelegate, WKNavigationDele
                 status.centerYAnchor.constraint(equalTo: container.centerYAnchor)
             ])
         }
+        // A transparent native drag region, above the web view, makes the
+        // application's header draggable without intercepting the macOS
+        // traffic lights (left) or the Preferences button (right).
+        let dragHandle = ReSyncWindowDragHandle(frame: .zero)
+        dragHandle.translatesAutoresizingMaskIntoConstraints = false
+        dragHandle.toolTip = "Arraste para mover a janela do ReSync"
+        if let container = window.contentView {
+            container.addSubview(dragHandle)
+            NSLayoutConstraint.activate([
+                dragHandle.topAnchor.constraint(equalTo: container.topAnchor),
+                dragHandle.leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: 105),
+                dragHandle.trailingAnchor.constraint(equalTo: container.trailingAnchor, constant: -78),
+                dragHandle.heightAnchor.constraint(equalToConstant: 68)
+            ])
+        }
+
         window.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
         startBackend()
