@@ -1,0 +1,38 @@
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+venv/
+.build-venv/
+.build-temp/
+.build-dist/
+*.spec
+
+# macOS generated builds
+.DS_Store
+*.app/
+*.dmg
+saida/
+
+# Client media and private data — never commit real project files
+*.mov
+*.MOV
+*.mp4
+*.MP4
+*.mxf
+*.MXF
+*.wav
+*.WAV
+*.aif
+*.aiff
+*.mp3
+*.xml
+*.prproj
+*.csv
+*.log
+*.pem
+*.p12
+*.p8
+.env*
+*.zip
