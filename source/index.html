@@ -19,6 +19,33 @@
 .view:not(.active){display:none!important}
 .welcome.active,.processing.active,.done.active{display:flex}
 .native-mac .traffic{visibility:hidden}
+
+/* Native macOS window: fill the WKWebView instead of simulating a browser
+   window inside another window. Prevent the document-level scrollbar. */
+html.native-mac,
+html.native-mac body{width:100%;height:100%;min-height:0;overflow:hidden}
+html.native-mac body{margin:0;padding:0;background:#121315}
+html.native-mac .window{
+  width:100%;height:100%;max-width:none;min-height:0;margin:0;
+  border:0;border-radius:0;box-shadow:none;display:flex;flex-direction:column
+}
+html.native-mac .topbar{
+  flex:none;height:68px;min-height:68px;padding:0 31px
+}
+html.native-mac main{flex:1;min-height:0;overflow:hidden}
+html.native-mac .view.active{height:100%;min-height:0;overflow-y:auto;overscroll-behavior:contain}
+html.native-mac .welcome.active{padding:22px 24px 24px}
+html.native-mac .welcome .hero-sub{margin:12px auto 26px}
+html.native-mac .welcome .dropzone{height:clamp(185px,31vh,248px)}
+html.native-mac .welcome .bottom-capabilities{margin-top:24px}
+html.native-mac .welcome .fine{margin-top:18px}
+html.native-mac .processing.active{padding:25px 30px}
+html.native-mac .done.active{padding:26px 24px}
+html.native-mac .done-foot{margin-top:43px}
+html.native-mac .result.active{padding:24px 30px}
+/* Keep scrolling with trackpad/mouse, hide the bulky embedded scrollbar. */
+html.native-mac,html.native-mac *{scrollbar-width:none}
+html.native-mac ::-webkit-scrollbar{display:none;width:0;height:0}
 </style>
 </head>
 <body>
