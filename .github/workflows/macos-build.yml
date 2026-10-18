@@ -22,6 +22,14 @@ jobs:
           xcrun --find swiftc
       - name: Instalar dependências dos testes
         run: python3 -m pip install -r source/requirements.txt
+      - name: Disponibilizar FFmpeg para os testes
+        run: |
+          python -m pip install 'imageio-ffmpeg>=0.5,<1'
+          mkdir -p "$RUNNER_TEMP/resync-bin"
+          ln -sf "$(python -c 'import imageio_ffmpeg; print(imageio_ffmpeg.get_ffmpeg_exe())')" "$RUNNER_TEMP/resync-bin/ffmpeg"
+          echo "$RUNNER_TEMP/resync-bin" >> "$GITHUB_PATH"
+      - name: Confirmar FFmpeg disponível
+        run: ffmpeg -version
       - name: Testar motor antes da compilação
         run: python3 -m unittest discover -s source/tests -p 'test_*.py' -q
       - name: Compilar aplicativo experimental
