@@ -17,6 +17,17 @@ https://github.com/namoelretake/retake-resync/releases/latest/download/appcast.x
 - Sem chave EdDSA **pública** no bundle, mostra "Atualizações em preparação".
 - A 0.6.3 configurada será a **primeira instalação manual**. Somente versões posteriores, publicadas como Releases corretamente assinados, poderão ser instaladas pelo próprio aplicativo.
 
+## Assistente simples para macOS
+
+Para configurar as chaves sem digitar comandos de criptografia:
+
+1. Baixe `tools/Configurar_Chaves_ReSync.command` deste repositório.
+2. Abra Terminal e execute `bash ~/Downloads/Configurar_Chaves_ReSync.command` (se baixou em Downloads).
+3. O assistente valida o Sparkle 2.10.0 por SHA-256, gera uma chave EdDSA exclusiva do ReSync no Chaves do macOS, copia primeiro a chave pública e depois a privada, abrindo a página de segredos do GitHub em cada etapa.
+4. Cadastre os segredos com os nomes exatos indicados pelo assistente. Não envie os valores ao ChatGPT.
+
+A chave privada é exportada apenas para pasta temporária com acesso restrito e o assistente apaga o arquivo e limpa a área de transferência ao encerrar. Faça backup seguro da chave que permanece no Chaves do macOS.
+
 ## Configuração única das chaves
 
 1. No seu Mac, baixe o Sparkle 2.10.0 da página oficial: https://github.com/sparkle-project/Sparkle/releases/tag/2.10.0.
