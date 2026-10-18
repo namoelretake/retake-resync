@@ -77,12 +77,19 @@ final class ReSyncAppDelegate: NSObject, NSApplicationDelegate, WKNavigationDele
         env["PYTHONUNBUFFERED"] = "1"
         let tools = resources.appendingPathComponent("bin", isDirectory: true).path
         env["PATH"] = tools + ":/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:" + (env["PATH"] ?? "")
+        // Prefer the bundled PyInstaller server, so the standalone .app does
+        // not require Python or a manually configured environment variable.
+        let bundledServer = resources.appendingPathComponent("backend/resync-server/resync-server")
         if let executable = env["RESYNC_BACKEND_EXECUTABLE"], !executable.isEmpty {
             proc.executableURL = URL(fileURLWithPath: executable)
+        } else if FileManager.default.isExecutableFile(atPath: bundledServer.path) {
+            proc.executableURL = bundledServer
+            proc.currentDirectoryURL = bundledServer.deletingLastPathComponent()
         } else {
+            // Developer/launcher fallback: run the source with local Python.
             let source = resources.appendingPathComponent("source", isDirectory: true)
             guard let python = env["RESYNC_PYTHON"], !python.isEmpty else {
-                showError("O Python local não foi configurado para esta versão do ReSync.")
+                showError("O motor integrado não foi encontrado. Recompile o ReSync ou confira os arquivos do aplicativo.")
                 return
             }
             proc.executableURL = URL(fileURLWithPath: python)
