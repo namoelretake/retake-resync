@@ -1,6 +1,14 @@
 name: ReSync — compilar macOS manualmente
 
 on:
+  push:
+    branches: [main]
+    paths:
+      - 'native/**'
+      - 'source/index.html'
+      - 'build/**'
+      - 'assets/**'
+      - '.github/workflows/macos-build.yml'
   workflow_dispatch:
 
 permissions:
