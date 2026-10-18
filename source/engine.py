@@ -32,6 +32,9 @@ NFFT = 1024
 AUTO_STRONG_SCORE = 0.46
 AUTO_CONSENSUS_SCORE = 0.38
 MIN_VERIFIED_OVERLAP = 1.0
+# Gap between distinct audio-verified recording blocks on the Premiere timeline.
+# Never add this inside a block: member clips must preserve their relative sync.
+VERIFIED_BLOCK_GAP_SECONDS = 10.0
 
 
 def fps_from_rate(element: ET.Element | None, default: float = 30.0) -> float:
@@ -695,29 +698,44 @@ def sync(project: Project, reference_track: str = 'auto', media_folder: str = ''
     verified = [coords for coords in components.values() if len(coords) > 1]
     verified.sort(key=lambda comp: min(by_id[k].start for k in comp))
     cursor = 0.0
-    for coords in verified:
-        # Use source project clock for first component if it begins at 0. This
-        # keeps timecode of a single continuous multicam event stable.
-        if cursor == 0:
+    for block_index, coords in enumerate(verified):
+        # A component is a complete multicam block. Calculate its bounding
+        # interval from EVERY real clip (video, linked scratch audio, etc.),
+        # not just the Group anchor / nominal duration. Linked clips may
+        # begin slightly before or finish after their group's main video.
+        block_start = min(
+            relative + clip.start - by_id[gid].start
+            for gid, relative in coords.items()
+            for clip in by_id[gid].members
+        )
+        block_end = max(
+            relative + clip.start - by_id[gid].start + clip.duration
+            for gid, relative in coords.items()
+            for clip in by_id[gid].members
+        )
+        # Preserve the first block's original timecode when possible. Every
+        # subsequent independent block starts only after the previous block's
+        # actual final clip plus 10 seconds; synchronized offsets inside each
+        # block stay untouched.
+        if block_index == 0:
             origin = next((g for g in groups if g.gid in coords and
                            any(c.track_key == reference_track for c in g.members)),
                           by_id[next(iter(coords))])
-            shift = max(origin.start - coords[origin.gid], -min(coords.values()))
+            shift = max(origin.start - coords[origin.gid], -block_start)
         else:
-            shift = cursor + 2.0 - min(coords.values())
-        for gid,relative in coords.items():
+            shift = cursor + VERIFIED_BLOCK_GAP_SECONDS - block_start
+        for gid, relative in coords.items():
             g = by_id[gid]
             g.assigned = relative + shift
             g.status = 'synced'
             partners = evidence[gid]
             if partners:
-                g.match_score = max(v for _,v in partners)
-                peer = by_id[max(partners,key=lambda x:x[1])[0]]
+                g.match_score = max(v for _, v in partners)
+                peer = by_id[max(partners, key=lambda x: x[1])[0]]
                 g.matched_to = peer.title
                 g.reason = 'Sincronizado: áudio confirmado por outra gravação'
-                g.verified_partner_ids.update(x for x,_ in partners)
-        cursor=max(cursor,max(by_id[gid].assigned + max(c.duration for c in by_id[gid].members)
-                              for gid in coords))
+                g.verified_partner_ids.update(x for x, _ in partners)
+        cursor = max(cursor, block_end + shift)
 
     matched_end=cursor
     tail_start=max(0.0,matched_end)+2 if verified else 0.0
