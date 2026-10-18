@@ -1,0 +1,33 @@
+#!/bin/bash
+# Quick .app launcher: uses local Python and FFmpeg already installed by the user.
+set -Eeuo pipefail
+APP="$(cd "$(dirname "$0")/../.." && pwd)"
+RES="$APP/Contents/Resources"
+SUPPORT="$HOME/Library/Application Support/ReSync"
+LOGDIR="$HOME/Library/Logs/ReSync"
+mkdir -p "$SUPPORT" "$LOGDIR"
+LOG="$LOGDIR/ReSync.log"
+export PATH="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:$PATH"
+fail() {
+  printf '%s\n' "$(date): $*" >> "$LOG"
+  osascript -e 'display alert "ReSync não pôde iniciar" message "Verifique se Python 3, FFmpeg e as ferramentas Apple estão instalados. O log fica em ~/Library/Logs/ReSync/ReSync.log. Se precisar, instale pelo Homebrew: brew install python ffmpeg" as warning' >/dev/null 2>&1 || true
+  exit 1
+}
+command -v python3 >/dev/null || fail 'python3 não encontrado'
+command -v ffmpeg >/dev/null || fail 'ffmpeg não encontrado'
+command -v xcrun >/dev/null || fail 'Xcode CLT não encontrado'
+xcrun --find swiftc >/dev/null 2>&1 || fail 'swiftc não encontrado'
+VENV="$SUPPORT/venv"
+if [ ! -x "$VENV/bin/python" ]; then python3 -m venv "$VENV" >> "$LOG" 2>&1 || fail 'venv falhou'; fi
+if ! "$VENV/bin/python" -c 'import numpy' >/dev/null 2>&1; then
+  osascript -e 'display notification "Preparando o motor de áudio (somente na primeira abertura)" with title "ReSync"' || true
+  "$VENV/bin/python" -m pip install 'numpy>=1.24,<3' >> "$LOG" 2>&1 || fail 'instalação do NumPy falhou'
+fi
+BIN="$SUPPORT/ReSyncWindow"
+if [ ! -x "$BIN" ] || [ "$RES/native/ReSyncNative.swift" -nt "$BIN" ]; then
+  osascript -e 'display notification "Preparando a janela do Mac (somente na primeira abertura)" with title "ReSync"' || true
+  xcrun swiftc -O -framework Cocoa -framework WebKit "$RES/native/ReSyncNative.swift" -o "$BIN" >> "$LOG" 2>&1 || fail 'compilação Swift falhou'
+fi
+export RESYNC_BUNDLE_ROOT="$APP"
+export RESYNC_PYTHON="$VENV/bin/python"
+exec "$BIN" >> "$LOG" 2>&1
