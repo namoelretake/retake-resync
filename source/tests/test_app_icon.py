@@ -24,9 +24,9 @@ class TestAppIcon(unittest.TestCase):
     def test_version_and_interface_agree(self):
         plist = (ROOT / "build" / "Info.plist").read_text(encoding="utf-8")
         html = (ROOT / "source" / "index.html").read_text(encoding="utf-8")
-        self.assertIn('<key>CFBundleVersion</key><string>5</string>', plist)
-        self.assertIn('<key>CFBundleShortVersionString</key><string>0.6.5</string>', plist)
-        self.assertIn("ReSync <small>v0.6.5</small>", html)
+        self.assertIn('<key>CFBundleVersion</key><string>6</string>', plist)
+        self.assertIn('<key>CFBundleShortVersionString</key><string>0.6.6</string>', plist)
+        self.assertIn("ReSync <small>v0.6.6</small>", html)
 
 
 if __name__ == "__main__":
