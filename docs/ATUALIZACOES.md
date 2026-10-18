@@ -1,48 +1,49 @@
-# ReSync — atualizações automáticas no macOS
+# ReSync — atualizações pelo próprio aplicativo
 
-## Arquitetura
+## Distribuição pública
 
-- **Código privado** no `namoelretake/retake-resync`.
-- **Canal público só para instaladores**: o repositório `namoelretake/resync-updates`, ainda a ser criado e autorizado pelo proprietário.
-- **Atualizador nativo**: Sparkle 2.10.0 integrado ao `ReSync.app`. O Sparkle substitui o aplicativo e oferece reinicialização segura.
-- **Feed**: `https://raw.githubusercontent.com/namoelretake/resync-updates/main/appcast.xml`, apontando para arquivos de releases hospedados no repositório público de distribuição.
-- **Assinatura**: cada arquivo de atualização precisa de assinatura EdDSA. O aplicativo contém somente a chave **pública**. A chave **privada nunca deve ser enviada ao repositório, aplicativo ou conversa**.
+O código e os instaladores são distribuídos pelo **mesmo repositório público**:
+https://github.com/namoelretake/retake-resync
 
-## Situação atual (0.6.3)
+O botão **Buscar atualizações** usa o Sparkle 2.10.0, e o appcast fica sempre no asset `appcast.xml` do último GitHub Release:
+https://github.com/namoelretake/retake-resync/releases/latest/download/appcast.xml
 
-O botão **Buscar atualizações** está integrado às Preferências e envia a ação para o atualizador macOS. O framework Sparkle já faz parte da compilação.
+**Atenção:** o GitHub não muda a visibilidade do repositório sozinho. Em Settings → General → Danger Zone → Change repository visibility, o proprietário precisa escolher Public e confirmar. Confira antes de publicar se não há material confidencial no histórico do Git.
 
-**Ainda não haverá instalação de atualização** enquanto faltarem:
-1. O repositório público `resync-updates` com feed e releases assinados.
-2. A chave pública EdDSA fornecida na compilação (`SPARKLE_PUBLIC_ED_KEY`).
-3. Uma compilação inicial do ReSync 0.6.3 com essa chave pública, instalada manualmente **uma última vez**.
+## Situação 0.6.3
 
-Se não houver chave pública na compilação, o programa informa "Atualizações em preparação" em vez de simular sucesso.
+- Botão implementado em Preferências.
+- Sparkle integrado na versão para Mac; 13 testes do motor passaram no GitHub.
+- Sem chave EdDSA **pública** no bundle, mostra "Atualizações em preparação".
+- A 0.6.3 configurada será a **primeira instalação manual**. Somente versões posteriores, publicadas como Releases corretamente assinados, poderão ser instaladas pelo próprio aplicativo.
 
-## Preparação de assinatura — no Mac do proprietário
+## Configuração única das chaves
 
-1. Baixe a distribuição oficial do Sparkle em https://github.com/sparkle-project/Sparkle/releases/tag/2.10.0 e confira SHA-256 `c2bf58aa8387266ac179357b1415d6f2635f044da8be41042af32425dae6da0c`.
-2. Execute `bin/generate_keys` (conforme a documentação Sparkle). Isso cria o par EdDSA e guarda a chave privada no Chaves do macOS.
-3. Guarde a chave privada/backup em local seguro; não cole a chave privada no GitHub nem no ChatGPT.
-4. Copie **somente a chave pública**, gerada pelo Sparkle, para o segredo `SPARKLE_PUBLIC_ED_KEY` do repositório de código, ou passe como variável de ambiente ao compilar localmente.
-5. Compile novamente, instale a versão inicial e teste o botão.
+1. No seu Mac, baixe o Sparkle 2.10.0 da página oficial: https://github.com/sparkle-project/Sparkle/releases/tag/2.10.0.
+2. Execute `bin/generate_keys` do Sparkle. Ele gera um par EdDSA e guarda a chave privada no Chaves do macOS. Copie a chave pública impressa.
+3. Exporte a chave **privada para um arquivo local seguro** usando `generate_keys -x /caminho/privada.key` (consulte `generate_keys --help`). Faça backup criptografado e não envie a chave privada em mensagens ou commits.
+4. Abra Settings → Secrets and variables → Actions → New repository secret no GitHub. Salve:
+   - `SPARKLE_PUBLIC_ED_KEY`: valor da chave pública (base64);
+   - `SPARKLE_PRIVATE_ED_KEY`: conteúdo do arquivo exportado da chave privada (base64).
+5. Exclua a cópia temporária em texto plano depois do backup e do cadastro do segredo, preservando a versão guardada no Chaves do Mac.
 
-## Como publicar atualizações depois
+A compilação usa a chave **pública** no `Info.plist`; a rotina de release lê a chave **privada somente no runner do GitHub**, grava em arquivo temporário com permissão restrita, assina o ZIP do aplicativo e apaga o arquivo.
 
-1. Incrementar `CFBundleVersion` e `CFBundleShortVersionString` em `build/Info.plist`.
-2. Rodar testes e compilar a versão para Apple Silicon.
-3. Compactar `ReSync.app` preservando atributos, permissões e links simbólicos (ex.: `ditto -c -k --sequesterRsrc --keepParent ReSync.app ReSync-0.6.4.zip`).
-4. Usar `bin/sign_update` ou `bin/generate_appcast` do Sparkle para assinar o ZIP com a chave EdDSA privada.
-5. Publicar o ZIP como GitHub Release em `resync-updates` e o `appcast.xml` assinado apontando para a URL real do arquivo.
-6. O botão **Buscar atualizações** abre a experiência nativa do Sparkle: comparação, download, verificação, atualização e reinicialização.
+**Nunca** mande o conteúdo da chave privada ao ChatGPT.
 
-**Importante:** não adianta fazer push de código novo. Sem release, assinatura válida e appcast atualizado o ReSync corretamente indicará que não há atualização.
+## Publicação das versões
 
-## Distribuição e segurança
+Após configurar os dois segredos e tornar o repo público:
 
-- Não usar um token pessoal do GitHub no código-fonte ou dentro do .app.
-- Nunca baixar e executar binários de URLs arbitrárias sem autenticação da assinatura.
-- Sparkle gerencia a assinatura EdDSA do pacote; para distribuição a terceiros recomenda-se também assinatura Developer ID e notarização pela Apple.
-- O código-fonte pode continuar privado, mas o canal público de instaladores será baixável por outras pessoas que tiverem a URL. Se essa exposição for indesejada, precisaremos construir um canal privado com autenticação do usuário.
-- A distribuição de FFmpeg com suporte a componentes GPL exige revisar as respectivas licenças antes de tornar os binários públicos.
-- A primeira instalação da versão com atualizador ainda é manual. Versões futuras serão instaladas pelo aplicativo.
+1. Atualize `CFBundleShortVersionString` e `CFBundleVersion` em `build/Info.plist` (números de build crescentes), e o número visível em `source/index.html`.
+2. Abra Actions → **ReSync — publicar atualização macOS** → Run workflow (branch main).
+3. O workflow executa os 13 testes, compila em macOS ARM64, gera um ZIP com links simbólicos preservados (`ditto`), assina com Sparkle EdDSA, cria `appcast.xml` e publica os três assets como GitHub Release.
+4. Instale manualmente a primeira versão com chave pública válida (0.6.3). Nas próximas, abra ReSync → Preferências → Buscar atualizações.
+
+## Avisos
+
+- Não faça release enquanto os dois segredos não estiverem cadastrados: o workflow falhará antes de publicar.
+- `macos-build.yml` cria apenas artefatos de teste não assinados. O pipeline de release é separado e exige chaves.
+- Para distribuição profissional a outras pessoas, recomenda-se assinatura Apple Developer ID e notarização. Essa etapa **não está implementada**, portanto o macOS pode mostrar alertas de segurança.
+- O FFmpeg empacotado pode incorporar componentes GPL; antes de distribuição ampla, verifique os avisos, licenças e obrigações de redistribuição.
+- Teste pelo menos uma atualização real entre versões consecutivas no seu Mac antes de considerar o sistema pronto.
