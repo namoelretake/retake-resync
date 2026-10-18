@@ -38,10 +38,38 @@ FFMPEG_BIN=$("$VENV/bin/python" -c 'import imageio_ffmpeg; print(imageio_ffmpeg.
 cp "$FFMPEG_BIN" "$APP/Contents/Resources/bin/ffmpeg"
 chmod 755 "$APP/Contents/Resources/bin/ffmpeg"
 
-echo "Compilando janela nativa em WebKit…"
-xcrun swiftc -O -framework Cocoa -framework WebKit "$BASE/native/ReSyncNative.swift" \
-  -o "$APP/Contents/MacOS/ReSync"
+echo "Obtendo Sparkle para atualizações seguras…"
+SPARKLE_VERSION="2.10.0"
+SPARKLE_SHA256="c2bf58aa8387266ac179357b1415d6f2635f044da8be41042af32425dae6da0c"
+SPARKLE_DIR="$BASE/.build-temp/Sparkle"
+SPARKLE_ARCHIVE="$BASE/.build-temp/Sparkle-${SPARKLE_VERSION}.tar.xz"
+mkdir -p "$SPARKLE_DIR" "$APP/Contents/Frameworks"
+curl --fail --location --silent --show-error --retry 3 \
+  "https://github.com/sparkle-project/Sparkle/releases/download/${SPARKLE_VERSION}/Sparkle-${SPARKLE_VERSION}.tar.xz" \
+  --output "$SPARKLE_ARCHIVE"
+echo "${SPARKLE_SHA256}  ${SPARKLE_ARCHIVE}" | shasum -a 256 -c -
+tar -xJf "$SPARKLE_ARCHIVE" -C "$SPARKLE_DIR"
+FRAMEWORK_SRC="$(find "$SPARKLE_DIR" -maxdepth 3 -name Sparkle.framework -type d -print -quit)"
+[[ -n "$FRAMEWORK_SRC" ]] || die "Sparkle.framework não encontrado na distribuição."
+ditto "$FRAMEWORK_SRC" "$APP/Contents/Frameworks/Sparkle.framework"
+
+echo "Compilando janela nativa em WebKit + Sparkle…"
+xcrun swiftc -O -framework Cocoa -framework WebKit \
+  -F "$APP/Contents/Frameworks" -framework Sparkle \
+  -Xlinker -rpath -Xlinker "@executable_path/../Frameworks" \
+  "$BASE/native/ReSyncNative.swift" -o "$APP/Contents/MacOS/ReSync"
 chmod 755 "$APP/Contents/MacOS/ReSync"
+
+# Sparkle requires a public EdDSA key embedded in the app. The private key
+# NEVER belongs in the source repository or app bundle.
+# Releases stay disabled until a properly signed public distribution exists.
+if [[ -n "${SPARKLE_PUBLIC_ED_KEY:-}" ]]; then
+  /usr/libexec/PlistBuddy -c "Add :SUPublicEDKey string ${SPARKLE_PUBLIC_ED_KEY}" "$APP/Contents/Info.plist"
+  /usr/libexec/PlistBuddy -c "Add :SUFeedURL string https://raw.githubusercontent.com/namoelretake/resync-updates/main/appcast.xml" "$APP/Contents/Info.plist"
+  echo "Canal Sparkle configurado. Publicações precisarão da chave EdDSA privada correspondente."
+else
+  echo "Aviso: SPARKLE_PUBLIC_ED_KEY não informado; atualização automática permanece desativada."
+fi
 
 cp "$BASE/assets/ReSyncIcon.icns" "$APP/Contents/Resources/ReSyncIcon.icns"
 
