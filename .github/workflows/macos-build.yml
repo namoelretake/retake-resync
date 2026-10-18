@@ -12,14 +12,28 @@ jobs:
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
-      - name: Conferir ferramentas
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Conferir ambiente
         run: |
           python3 --version
+          uname -m
           xcrun --find swiftc
+      - name: Instalar dependências dos testes
+        run: python3 -m pip install -r source/requirements.txt
+      - name: Testar motor antes da compilação
+        run: python3 -m unittest discover -s source/tests -p 'test_*.py' -q
       - name: Compilar aplicativo experimental
         env:
           CI: 'true'
         run: bash 'build/Criar ReSync Completo.command'
+      - name: Validar estrutura do aplicativo gerado
+        run: |
+          test -x saida/ReSync.app/Contents/MacOS/ReSync
+          test -x saida/ReSync.app/Contents/Resources/backend/resync-server/resync-server
+          test -x saida/ReSync.app/Contents/Resources/bin/ffmpeg
+          ls -lh saida/ReSync-macOS.dmg || true
       - name: Disponibilizar artefatos não assinados
         uses: actions/upload-artifact@v4
         with:
@@ -29,5 +43,6 @@ jobs:
             saida/ReSync-macOS.dmg
           if-no-files-found: error
 
-# Fluxo manual e experimental. Não publica Release nem instala atualização.
-# Runners macOS privados podem consumir minutos cobrados na conta GitHub.
+# Build manual para teste: pode consumir minutos cobrados no GitHub.
+# macos-15 usa runner Intel; a versão nativa arm64 deve ser compilada em um Mac Apple Silicon.
+# Não publica Release nem instala atualizações automaticamente.
