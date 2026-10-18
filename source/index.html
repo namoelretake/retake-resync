@@ -23,6 +23,7 @@
 .update-button:hover{background:#4c4d51}
 .update-button .icon{width:16px;height:16px}
 #updatenote{font-size:11px;line-height:1.5;min-height:32px}
+.file-input-accessible{position:absolute;width:1px;height:1px;padding:0;border:0;opacity:0;overflow:hidden;clip-path:inset(50%);pointer-events:none}
 .native-mac .traffic{visibility:hidden}
 
 /* Native macOS window: fill the WKWebView instead of simulating a browser
@@ -57,7 +58,7 @@ html.native-mac ::-webkit-scrollbar{display:none;width:0;height:0}
 <div class="window" id="app">
   <header class="topbar">
     <div class="traffic" aria-hidden="true"><i></i><i></i><i></i></div>
-    <div class="logo">ReSync <small>v0.6.3</small></div>
+    <div class="logo">ReSync <small>v0.6.4</small></div>
     <div class="topright"><span class="byline">por Retake</span>
       <button class="icon-btn" id="settingsbutton" title="Preferências" aria-label="Preferências" aria-expanded="false"><svg class="icon" viewBox="0 0 24 24"><path d="M10.5 3h3l.5 2.3 2 .9 2-1.2 2.1 2.1-1.2 2 .9 2 2.3.4v3l-2.3.5-.9 2 1.2 2-2.1 2.1-2-1.2-2 .9-.5 2.3h-3l-.5-2.3-2-.9-2 1.2-2.1-2.1 1.2-2-.9-2L2 13.5v-3l2.3-.5.9-2-1.2-2L6.1 4l2 1.2 2-.9z"/><circle cx="12" cy="12" r="3.3"/></svg></button>
     </div>
@@ -81,7 +82,7 @@ html.native-mac ::-webkit-scrollbar{display:none;width:0;height:0}
       <div class="dropzone" id="dropzone" role="button" tabindex="0" aria-label="Arraste seu XML ou selecione um arquivo">
         <svg class="file-icon" viewBox="0 0 58 70" fill="none" stroke="currentColor" stroke-width="1.35" stroke-linejoin="round"><path d="M11 1.5h24l12 12V58a5 5 0 0 1-5 5H11a5 5 0 0 1-5-5V6.5a5 5 0 0 1 5-5Z"/><path d="M35 2v12h12"/><path d="M19 31h17M19 37h13M19 43h9" stroke-opacity=".45"/></svg>
         <strong>Arraste o XML aqui</strong><span>ou <span class="mutedaction">selecione um arquivo</span> para começar</span>
-      </div><input type="file" id="fileinput" accept=".xml,text/xml,application/xml" hidden>
+      </div><input type="file" id="fileinput" class="file-input-accessible" accept=".xml,text/xml,application/xml" aria-label="Selecionar arquivo XML">
       <div class="error" id="welcomeerror" hidden role="alert"></div>
       <div class="bottom-capabilities">
         <div class="cap"><svg class="icon" viewBox="0 0 24 24"><path d="M2 12h2m2-4v8m3-12v16m3-13v10m3-14v18m3-12v6m3-4h1"/></svg>Áudio multicâmera</div>
@@ -138,7 +139,8 @@ $('settingsbutton').onclick=()=>{let open=$('settings').hidden;$('settings').hid
 function initAudio(){if(!$('sound').checked)return;try{let C=window.AudioContext||window.webkitAudioContext;if(C){audioContext??=new C();if(audioContext.state==='suspended')audioContext.resume().catch(()=>{});}}catch(e){}}
 function completionChime(){if(!$('sound').checked||!audioContext)return;const play=()=>{if(audioContext.state!=='running')return;try{let t=audioContext.currentTime+.07;[[523.25,0,.24],[783.99,.115,.42]].forEach(([freq,delay,dur])=>{let osc=audioContext.createOscillator(),gain=audioContext.createGain();osc.type='sine';osc.frequency.value=freq;gain.gain.setValueAtTime(.0001,t+delay);gain.gain.exponentialRampToValueAtTime(.019,t+delay+.023);gain.gain.exponentialRampToValueAtTime(.0001,t+delay+dur);osc.connect(gain).connect(audioContext.destination);osc.start(t+delay);osc.stop(t+delay+dur+.02);});}catch(e){}};if(audioContext.state==='suspended'){audioContext.resume().then(play).catch(()=>{});}else play();}
 const drop=$('dropzone');function handleDrop(e){e.preventDefault();e.stopPropagation();drop.classList.remove('dragging');let files=e.dataTransfer&&e.dataTransfer.files;if(files&&files.length)importXML(files[0]);}
-drop.addEventListener('click',()=>$('fileinput').click());drop.addEventListener('keydown',e=>{if(e.key==='Enter'||e.key===' '){e.preventDefault();$('fileinput').click()}});drop.addEventListener('dragover',e=>{e.preventDefault();drop.classList.add('dragging')});drop.addEventListener('dragleave',()=>drop.classList.remove('dragging'));drop.addEventListener('drop',handleDrop);document.addEventListener('dragover',e=>e.preventDefault());document.addEventListener('drop',e=>{e.preventDefault();if(!drop.contains(e.target))handleDrop(e)});$('fileinput').onchange=e=>{if(e.target.files[0])importXML(e.target.files[0]);e.target.value=''};
+function openXMLFilePicker(){const input=$('fileinput');input.value='';input.click()}
+drop.addEventListener('click',openXMLFilePicker);drop.addEventListener('keydown',e=>{if(e.key==='Enter'||e.key===' '){e.preventDefault();openXMLFilePicker()}});drop.addEventListener('dragover',e=>{e.preventDefault();drop.classList.add('dragging')});drop.addEventListener('dragleave',()=>drop.classList.remove('dragging'));drop.addEventListener('drop',handleDrop);document.addEventListener('dragover',e=>e.preventDefault());document.addEventListener('drop',e=>{e.preventDefault();if(!drop.contains(e.target))handleDrop(e)});$('fileinput').onchange=e=>{if(e.target.files[0])importXML(e.target.files[0]);e.target.value=''};
 async function req(url,options){const r=await fetch(url,options);let json=await r.json().catch(()=>({}));if(!r.ok)throw Error(json.error||`Erro HTTP ${r.status}`);return json;}
 function progress(p,message){p=Math.max(0,Math.min(100,Math.round(Number(p)||0)));$('progresspercent').textContent=p+'%';$('progressbar').setAttribute('aria-valuenow',String(p));$('progressfill').style.width=p+'%';$('progressmessage').textContent=message||'Analisando seu projeto…';let stage=p<18?0:p<85?1:2;for(let i=0;i<3;i++){let row=$('phase'+i);row.classList.toggle('complete',i<stage);row.classList.toggle('current',i===stage);$('picon'+i).innerHTML=i<stage?'✓':i===stage?'<span class="spin-small"></span>':'·';$('detail'+i).textContent=i<stage?'Concluído':i===stage?'Em andamento':'Aguardando';}}
 async function importXML(file){if(state==='processing'&&$('mediahelp').hidden)return;if(!file||!/\.xml$/i.test(file.name)){revealError('welcomeerror','Selecione um XML exportado pelo Premiere Pro (Final Cut Pro 7 XML).');screen('welcome');return;}initAudio();clearErrors();clearTimeout(pollTimer);$('mediahelp').hidden=true;screen('processing');progress(0,'Lendo XML do Premiere…');$('processSubtitle').textContent='Lendo a estrutura do XML e identificando os arquivos originais.';try{let body=await file.arrayBuffer();let data=await req('/api/import',{method:'POST',headers:{'X-Project-Name':encodeURIComponent(file.name.replace(/\.xml$/i,''))},body});project=data;result=null;syncStarted=Date.now();$('processSubtitle').textContent=`${data.source_groups} takes encontrados · ${data.tracks.length} pistas identificadas`;if(data.media_found<data.media_total){$('mediahelp').hidden=false;$('mediahelp').querySelector('p').textContent=`Localizados ${data.media_found} de ${data.media_total} arquivos originais. Informe a pasta principal dos vídeos e áudios para tentar encontrar os restantes.`;progress(7,'Aguardando localização dos arquivos…');return;}await startSync();}catch(e){screen('welcome');revealError('welcomeerror','Não foi possível importar o XML: '+e.message);}}
