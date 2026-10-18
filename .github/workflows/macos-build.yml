@@ -58,6 +58,11 @@ jobs:
           test -x saida/ReSync.app/Contents/MacOS/ReSync
           test -x saida/ReSync.app/Contents/Resources/backend/resync-server/resync-server
           test -x saida/ReSync.app/Contents/Resources/bin/ffmpeg
+          test -s saida/ReSync.app/Contents/Resources/ReSyncIcon.png
+          test -s saida/ReSync.app/Contents/Resources/ReSyncIcon.icns
+          sips -g pixelWidth saida/ReSync.app/Contents/Resources/ReSyncIcon.png | grep 1024
+          iconutil -c iconset saida/ReSync.app/Contents/Resources/ReSyncIcon.icns -o "$RUNNER_TEMP/ReSyncIconVerify.iconset"
+          test -s "$RUNNER_TEMP/ReSyncIconVerify.iconset/icon_512x512@2x.png"
           test -d saida/ReSync.app/Contents/Frameworks/Sparkle.framework
           otool -L saida/ReSync.app/Contents/MacOS/ReSync | grep Sparkle
           /usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" saida/ReSync.app/Contents/Info.plist

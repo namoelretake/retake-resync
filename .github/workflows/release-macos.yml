@@ -1,6 +1,10 @@
 name: ReSync — publicar atualização macOS
 
 on:
+  push:
+    branches: [main]
+    paths:
+      - 'build/Info.plist'
   workflow_dispatch:
     inputs:
       release_notes:
@@ -90,6 +94,9 @@ jobs:
           if gh release view "$RESYNC_TAG" >/dev/null 2>&1; then
             echo "::error::Release $RESYNC_TAG já existe. Aumente a versão antes de publicar outra."
             exit 1
+          fi
+          if [[ -z "$RELEASE_NOTES" ]]; then
+            RELEASE_NOTES="Novo ícone minimalista R. branco em fundo preto para macOS Apple Silicon."
           fi
           gh release create "$RESYNC_TAG" \
             "$RESYNC_ZIP" saida/ReSync-macOS.dmg saida/appcast.xml \
