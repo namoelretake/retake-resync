@@ -29,7 +29,6 @@ echo "Compilando motor Python…"
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources/backend" "$APP/Contents/Resources/bin"
 cp -R "$BASE/.build-dist/resync-server" "$APP/Contents/Resources/backend/"
-cp "$BASE/assets/ReSyncIcon.png" "$APP/Contents/Resources/ReSyncIcon.png"
 cp "$BASE/build/Info.plist" "$APP/Contents/Info.plist"
 
 echo "Incluindo FFmpeg para não depender do Homebrew…"
@@ -37,6 +36,29 @@ FFMPEG_BIN=$("$VENV/bin/python" -c 'import imageio_ffmpeg; print(imageio_ffmpeg.
 [[ -f "$FFMPEG_BIN" ]] || die "O pacote FFmpeg não forneceu um executável."
 cp "$FFMPEG_BIN" "$APP/Contents/Resources/bin/ffmpeg"
 chmod 755 "$APP/Contents/Resources/bin/ffmpeg"
+
+# Generate PNG and .icns from the selected R. artwork on every build,
+# preventing the Finder/Dock icon from retaining the previous app icon.
+echo "Preparando ícone oficial do ReSync (R. branco, fundo preto)…"
+ICON_SOURCE="$BASE/assets/ReSyncIconSource.webp"
+[[ -s "$ICON_SOURCE" ]] || die "A arte original do ícone não foi encontrada."
+"$FFMPEG_BIN" -hide_banner -loglevel error -y -i "$ICON_SOURCE" \
+  -frames:v 1 -vf "scale=1024:1024:flags=lanczos" -pix_fmt rgba \
+  "$APP/Contents/Resources/ReSyncIcon.png"
+[[ -s "$APP/Contents/Resources/ReSyncIcon.png" ]] || die "Falha ao converter o ícone em PNG."
+ICONSET="$BASE/.build-temp/ReSync.iconset"
+rm -rf "$ICONSET"
+mkdir -p "$ICONSET"
+for size in 16 32 128 256 512; do
+  double=$((size * 2))
+  sips -s format png -z "$size" "$size" "$APP/Contents/Resources/ReSyncIcon.png" \
+    --out "$ICONSET/icon_${size}x${size}.png" >/dev/null
+  sips -s format png -z "$double" "$double" "$APP/Contents/Resources/ReSyncIcon.png" \
+    --out "$ICONSET/icon_${size}x${size}@2x.png" >/dev/null
+done
+iconutil -c icns "$ICONSET" -o "$APP/Contents/Resources/ReSyncIcon.icns"
+[[ -s "$APP/Contents/Resources/ReSyncIcon.icns" ]] || die "Falha ao gerar o ícone nativo do macOS."
+
 
 echo "Obtendo Sparkle para atualizações seguras…"
 SPARKLE_VERSION="2.10.0"
@@ -72,7 +94,6 @@ else
   echo "Aviso: SPARKLE_PUBLIC_ED_KEY não informado; atualização automática permanece desativada."
 fi
 
-cp "$BASE/assets/ReSyncIcon.icns" "$APP/Contents/Resources/ReSyncIcon.icns"
 
 # Ad-hoc signature is suitable for a locally built app; public distribution requires Developer ID notarization.
 codesign --force --deep --sign - "$APP" >/dev/null 2>&1 || echo "Aviso: assinatura local não pôde ser aplicada."
