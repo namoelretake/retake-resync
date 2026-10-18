@@ -65,7 +65,7 @@ chmod 755 "$APP/Contents/MacOS/ReSync"
 # Releases stay disabled until a properly signed public distribution exists.
 if [[ -n "${SPARKLE_PUBLIC_ED_KEY:-}" ]]; then
   /usr/libexec/PlistBuddy -c "Add :SUPublicEDKey string ${SPARKLE_PUBLIC_ED_KEY}" "$APP/Contents/Info.plist"
-  /usr/libexec/PlistBuddy -c "Add :SUFeedURL string https://raw.githubusercontent.com/namoelretake/resync-updates/main/appcast.xml" "$APP/Contents/Info.plist"
+  /usr/libexec/PlistBuddy -c "Add :SUFeedURL string https://github.com/namoelretake/retake-resync/releases/latest/download/appcast.xml" "$APP/Contents/Info.plist"
   echo "Canal Sparkle configurado. Publicações precisarão da chave EdDSA privada correspondente."
 else
   echo "Aviso: SPARKLE_PUBLIC_ED_KEY não informado; atualização automática permanece desativada."
