@@ -1,5 +1,6 @@
 import AppKit
 import WebKit
+import UniformTypeIdentifiers
 import Sparkle
 
 // Native macOS window; the existing Python synchronizer runs on 127.0.0.1 only.
@@ -13,7 +14,7 @@ final class ReSyncWindowDragHandle: NSView {
         window?.performDrag(with: event)
     }
 }
-final class ReSyncAppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, WKScriptMessageHandler {
+final class ReSyncAppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, WKUIDelegate, WKScriptMessageHandler {
     private var window: NSWindow!
     private var webView: WKWebView!
     private var messageView: NSTextField!
@@ -51,6 +52,9 @@ final class ReSyncAppDelegate: NSObject, NSApplicationDelegate, WKNavigationDele
         config.userContentController.addUserScript(WKUserScript(source: "document.documentElement.classList.add('native-mac');", injectionTime: .atDocumentEnd, forMainFrameOnly: true))
         let view = WKWebView(frame: .zero, configuration: config)
         view.navigationDelegate = self
+        // Without a WKUIDelegate, file input elements cannot present
+        // the native Open panel reliably inside our embedded WKWebView.
+        view.uiDelegate = self
         self.webView = view
         view.translatesAutoresizingMaskIntoConstraints = false
         view.isHidden = true
@@ -200,6 +204,26 @@ final class ReSyncAppDelegate: NSObject, NSApplicationDelegate, WKNavigationDele
         alert.informativeText = description
         alert.addButton(withTitle: "OK")
         alert.beginSheetModal(for: window)
+    }
+
+    // Opens the macOS file chooser for <input type="file"> in the ReSync UI.
+    // WKWebView does not provide the default browser file-picker experience.
+    // The completion handler hands the selected URL back to WebKit; the
+    // existing JavaScript file-change handler continues importing the XML.
+    func webView(_ webView: WKWebView,
+                 runOpenPanelWith parameters: WKOpenPanelParameters,
+                 initiatedByFrame frame: WKFrameInfo,
+                 completionHandler: @escaping ([URL]?) -> Void) {
+        let panel = NSOpenPanel()
+        panel.allowedContentTypes = [UTType.xml]
+        panel.allowsMultipleSelection = false
+        panel.canChooseDirectories = false
+        panel.canChooseFiles = true
+        panel.prompt = "Selecionar XML"
+        panel.message = "Escolha um XML exportado pelo Premiere Pro (Final Cut Pro 7 XML)."
+        panel.beginSheetModal(for: window) { response in
+            completionHandler(response == .OK ? panel.urls : nil)
+        }
     }
 
     func webView(_ webView: WKWebView, decidePolicyFor navigationAction: WKNavigationAction,
