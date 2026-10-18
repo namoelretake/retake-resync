@@ -18,6 +18,11 @@
 
 .view:not(.active){display:none!important}
 .welcome.active,.processing.active,.done.active{display:flex}
+.settings-separator{height:1px;background:rgba(255,255,255,.11);margin:15px 0 13px}
+.update-button{display:flex;align-items:center;justify-content:center;gap:9px;width:100%;height:38px;background:#3a3b3e;border:1px solid #58595d;color:#f2f2f4;border-radius:10px;font-size:12px;font-weight:570;cursor:pointer}
+.update-button:hover{background:#4c4d51}
+.update-button .icon{width:16px;height:16px}
+#updatenote{font-size:11px;line-height:1.5;min-height:32px}
 .native-mac .traffic{visibility:hidden}
 
 /* Native macOS window: fill the WKWebView instead of simulating a browser
@@ -57,7 +62,17 @@ html.native-mac ::-webkit-scrollbar{display:none;width:0;height:0}
       <button class="icon-btn" id="settingsbutton" title="Preferências" aria-label="Preferências" aria-expanded="false"><svg class="icon" viewBox="0 0 24 24"><path d="M10.5 3h3l.5 2.3 2 .9 2-1.2 2.1 2.1-1.2 2 .9 2 2.3.4v3l-2.3.5-.9 2 1.2 2-2.1 2.1-2-1.2-2 .9-.5 2.3h-3l-.5-2.3-2-.9-2 1.2-2.1-2.1 1.2-2-.9-2L2 13.5v-3l2.3-.5.9-2-1.2-2L6.1 4l2 1.2 2-.9z"/><circle cx="12" cy="12" r="3.3"/></svg></button>
     </div>
   </header>
-  <div class="settings-pop" id="settings" hidden><strong>Preferências</strong><label class="switch-row" for="sound">Som ao concluir <input class="toggle" id="sound" type="checkbox" checked></label><p>Um aviso sonoro curto e discreto quando a sincronização terminar. Nenhuma configuração técnica é necessária.</p></div>
+  <div class="settings-pop" id="settings" hidden>
+    <strong>Preferências</strong>
+    <label class="switch-row" for="sound">Som ao concluir <input class="toggle" id="sound" type="checkbox" checked></label>
+    <p>Um aviso sonoro curto e discreto quando a sincronização terminar.</p>
+    <div class="settings-separator"></div>
+    <button class="update-button" id="checkupdates" type="button">
+      <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 7v5h-5M4 17v-5h5"/><path d="M5.7 9A7 7 0 0 1 18 7l2 5M4 12l2 5a7 7 0 0 0 12.3-2"/></svg>
+      Buscar atualizações
+    </button>
+    <p id="updatenote" aria-live="polite">O ReSync poderá instalar novas versões sem baixar ZIPs manualmente.</p>
+  </div>
   <main>
     <section class="view welcome active" id="welcome" aria-label="Importar projeto">
       <div class="hero-eyebrow">Sincronização multicâmera</div>
@@ -110,6 +125,15 @@ function screen(name){state=name;for(const s of ['welcome','processing','done','
 function revealError(id,msg){$(id).hidden=false;$(id).textContent=msg;}function clearErrors(){$('welcomeerror').hidden=true;$('processerror').hidden=true;}
 function buildDecor(){const wave=$('wave');for(let i=0;i<142;i++){let envelope=.28+.72*Math.pow(Math.abs(Math.sin(i*.137+1.4)),2);let x=Math.abs(Math.sin(i*.91)+Math.sin(i*.193)*.45);let h=Math.max(4,Math.min(110,Math.round((8+x*40)*envelope)));let s=document.createElement('span');s.style.height=h+'px';s.style.animationDelay=-(i*.091%2.4)+'s';wave.appendChild(s)}for(let i=0;i<12;i++){let d=document.createElement('div');d.className='frame';d.style.animationDelay=-(i*.31)+'s';$('frames').appendChild(d)}}buildDecor();
 try{$('sound').checked=localStorage.getItem(SOUND_KEY)!=='off'}catch(e){}$('sound').addEventListener('change',()=>{try{localStorage.setItem(SOUND_KEY,$('sound').checked?'on':'off')}catch(e){}});
+$('checkupdates').onclick=()=>{
+  const native=window.webkit?.messageHandlers?.resync;
+  if(native){
+    $('updatenote').textContent='Abrindo o verificador de atualizações do macOS…';
+    native.postMessage({action:'checkUpdates'});
+  }else{
+    $('updatenote').textContent='O atualizador funciona na versão ReSync.app para macOS.';
+  }
+};
 $('settingsbutton').onclick=()=>{let open=$('settings').hidden;$('settings').hidden=!open;$('settingsbutton').setAttribute('aria-expanded',String(open));};document.addEventListener('pointerdown',e=>{if(!$('settings').hidden&&!$('settings').contains(e.target)&&!$('settingsbutton').contains(e.target)){$('settings').hidden=true;$('settingsbutton').setAttribute('aria-expanded','false')}});
 function initAudio(){if(!$('sound').checked)return;try{let C=window.AudioContext||window.webkitAudioContext;if(C){audioContext??=new C();if(audioContext.state==='suspended')audioContext.resume().catch(()=>{});}}catch(e){}}
 function completionChime(){if(!$('sound').checked||!audioContext)return;const play=()=>{if(audioContext.state!=='running')return;try{let t=audioContext.currentTime+.07;[[523.25,0,.24],[783.99,.115,.42]].forEach(([freq,delay,dur])=>{let osc=audioContext.createOscillator(),gain=audioContext.createGain();osc.type='sine';osc.frequency.value=freq;gain.gain.setValueAtTime(.0001,t+delay);gain.gain.exponentialRampToValueAtTime(.019,t+delay+.023);gain.gain.exponentialRampToValueAtTime(.0001,t+delay+dur);osc.connect(gain).connect(audioContext.destination);osc.start(t+delay);osc.stop(t+delay+dur+.02);});}catch(e){}};if(audioContext.state==='suspended'){audioContext.resume().then(play).catch(()=>{});}else play();}
