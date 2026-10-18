@@ -1,0 +1,33 @@
+name: ReSync — compilar macOS manualmente
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  macos-app:
+    runs-on: macos-15
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - name: Conferir ferramentas
+        run: |
+          python3 --version
+          xcrun --find swiftc
+      - name: Compilar aplicativo experimental
+        env:
+          CI: 'true'
+        run: bash 'build/Criar ReSync Completo.command'
+      - name: Disponibilizar artefatos não assinados
+        uses: actions/upload-artifact@v4
+        with:
+          name: ReSync-macOS-unsigned
+          path: |
+            saida/ReSync.app
+            saida/ReSync-macOS.dmg
+          if-no-files-found: error
+
+# Fluxo manual e experimental. Não publica Release nem instala atualização.
+# Runners macOS privados podem consumir minutos cobrados na conta GitHub.
