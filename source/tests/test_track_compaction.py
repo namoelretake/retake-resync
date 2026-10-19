@@ -125,6 +125,20 @@ class TestGlobalTrackCompaction(unittest.TestCase):
         self.assertEqual([t.findtext('outputchannelindex') for t in tracks],
                          ['1','2'])
 
+    def test_links_count_retained_opaque_clipitems_in_protected_tracks(self):
+        opaque = ('<clipitem id="opaque"><start>-1</start><end>50</end>'
+                  '<in>0</in><out>50</out></clipitem>')
+        video = [{'body': opaque + xml_clip('v1', 0, 50, ('a1','audio',1))}]
+        audio = [{'body': xml_clip('a1', 0, 50, ('v1','video',1))}]
+        project = Project(make_xml(video, audio))
+        root = ET.fromstring(project.to_xml())
+        track = root.find('./sequence/media/video/track')
+        self.assertEqual([c.get('id') for c in track.findall('clipitem')],
+                         ['opaque','v1'])
+        audio_link = root.find('.//clipitem[@id="a1"]/link')
+        self.assertEqual(audio_link.findtext('trackindex'), '1')
+        self.assertEqual(audio_link.findtext('clipindex'), '2')
+
     def test_opaque_transitions_and_unparsed_clips_are_preserved(self):
         opaque = ('<transitionitem id="fade"><start>49</start><end>60</end></transitionitem>'
                   '<clipitem id="opaque"><start>-1</start><end>90</end>'
