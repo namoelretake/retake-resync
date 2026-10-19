@@ -1,8 +1,22 @@
 :root { --bg: #111214; --card: #1d1e20; --outline: #34363a; --white:#f4f4f5; --soft:#b7b9bd; --muted:#84878b; }
 * { box-sizing: border-box; }
-html,body { margin:0;min-height:100%;background:var(--bg);color:var(--white);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; }
+/* UXP panels are nested in Premiere's dock/floating views. Define a bounded
+   height so mouse wheel and trackpad gestures scroll the panel itself. */
+html,body { margin:0;width:100%;height:100%;min-height:0;overflow:hidden;background:var(--bg);color:var(--white);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; }
+body { display:flex;flex-direction:column; }
+
 button { font:inherit; }
-.plugin-panel { min-width:0; padding:21px 18px 18px; margin:0 auto; width:100%; max-width:640px; }
+.plugin-panel {
+  width:100%;max-width:640px;height:100%;max-height:100%;min-height:0;
+  min-width:0;flex:1 1 auto;padding:21px 18px 24px;margin:0 auto;
+  overflow-y:auto;overflow-x:hidden;overscroll-behavior-y:contain;
+  -webkit-overflow-scrolling:touch;
+  scrollbar-width:thin;scrollbar-color:#55575d transparent;
+}
+.plugin-panel::-webkit-scrollbar{width:6px}
+.plugin-panel::-webkit-scrollbar-track{background:transparent}
+.plugin-panel::-webkit-scrollbar-thumb{background:#484a50;border-radius:6px}
+
 .header,.brand-row,.section-head,.track-summary { display:flex; align-items:center; }
 .header { justify-content:space-between; gap:10px; padding-bottom:22px; border-bottom:1px solid #252629; }
 .brand-row { gap:11px; min-width:0; }
@@ -37,3 +51,28 @@ h2 { font-size:clamp(25px,5vw,35px);font-weight:730;letter-spacing:-1.15px;line-
 .status.success { border-color:#56735e;color:#b8e0c1; }
 .status.error { border-color:#875657;color:#fac1c2; }
 footer { text-align:center;line-height:1.6;font-size:9px;letter-spacing:1px;margin-top:25px; }
+
+/* Embedded synchronization workflow, minimal and dock-friendly. */
+.progress-track{height:4px;margin-top:13px;background:#32343a;border-radius:3px;overflow:hidden}
+.progress-fill{height:100%;width:0%;background:#e5e5e8;transition:width .22s ease}
+.advanced{display:flex;align-items:center;justify-content:space-between;gap:4px;margin-top:15px;flex-wrap:wrap}
+.advanced .text-button{font-size:10px;color:#9fa0a5;padding:5px 2px;text-decoration:underline;text-underline-offset:3px}
+
+/* Beta bridge diagnostics: never leave a disabled panel with no way out. */
+.stop-button{display:block;margin:10px auto 0;padding:7px 13px;color:#e1e2e4;background:transparent;border:1px solid #666870;border-radius:8px;font-size:11px;cursor:pointer}
+.stop-button:hover{background:#292a2e}
+.stop-button[hidden]{display:none}
+.helper-note{margin:12px 4px 0;font-size:10px;line-height:1.5;color:#a2a4aa}
+
+/* Keep the primary action reachable in compact, docked Premiere panels.
+   Scrolling remains available all the way to the status/footer. */
+@media (max-height:680px) {
+  .plugin-panel{padding:14px 14px 18px}
+  .header{padding-bottom:13px}
+  .intro{padding:16px 0}
+  h2{font-size:25px;margin:9px 0}
+  .project-card{padding:14px}
+  .sequence-name{margin-top:11px}
+  .track-summary{margin-top:12px;padding-top:12px}
+  footer{margin-top:16px}
+}

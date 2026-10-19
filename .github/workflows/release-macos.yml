@@ -55,6 +55,8 @@ jobs:
           CI: 'true'
           SPARKLE_PUBLIC_ED_KEY: ${{ secrets.SPARKLE_PUBLIC_ED_KEY }}
         run: bash 'build/Criar ReSync Completo.command'
+      - name: Validar motor do Premiere dentro do aplicativo compilado
+        run: python3 build/test_premiere_bridge_mac.py saida/ReSync.app
       - name: Empacotar e assinar a atualização
         env:
           SPARKLE_PRIVATE_ED_KEY: ${{ secrets.SPARKLE_PRIVATE_ED_KEY }}
@@ -96,7 +98,7 @@ jobs:
             exit 1
           fi
           if [[ -z "$RELEASE_NOTES" ]]; then
-            RELEASE_NOTES="Novo ícone minimalista R. branco em fundo preto para macOS Apple Silicon."
+            RELEASE_NOTES="ReSync 0.6.8: compactação global de pistas de vídeo e áudio, reutilizando espaços vazios sem sobrepor clipes; mantém sincronismo, vínculos e roteamento de áudio. Inclui a ponte local para o ReSync for Premiere, que pode criar uma nova sequência sincronizada. A sequência original permanece intacta. Aplicativo atualizado pelo Sparkle; o painel UXP Beta ainda precisa ser atualizado separadamente."
           fi
           gh release create "$RESYNC_TAG" \
             "$RESYNC_ZIP" saida/ReSync-macOS.dmg saida/appcast.xml \
