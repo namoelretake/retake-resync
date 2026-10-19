@@ -179,3 +179,15 @@ test('User can interrupt waiting for the bridge without altering project',async(
   assert.equal(app.getActive(),app.getSource());
   assert.match(app.elements.get('status').textContent,/Espera interrompida/);
 });
+
+test('Docked UXP panel can scroll down to status and footer without page clipping',()=>{
+  const css=readFileSync(path.join(ROOT,'styles.css'),'utf8');
+  const html=readFileSync(path.join(ROOT,'index.html'),'utf8');
+  assert.match(css,/html,body\s*\{[^}]*height:100%[^}]*overflow:hidden/s);
+  assert.match(css,/\.plugin-panel\s*\{[^}]*height:100%[^}]*min-height:0[^}]*overflow-y:auto/s);
+  assert.match(css,/\.plugin-panel::-webkit-scrollbar-thumb/);
+  assert.match(css,/@media\s*\(max-height:680px\)/);
+  assert.match(html,/id="status"/);
+  assert.match(html,/id="sync"/);
+  assert.match(html,/BETA 0\.4/);
+});
