@@ -237,11 +237,11 @@ class Project:
                 'multi_sequence': self.multi_sequence}
 
     def to_xml(self):
-        """Export all moved clips, creating new lanes if clips overlap within a track.
+        """Export moved clips into the fewest compatible collision-free tracks.
 
-        For FCP7 XML, overlapping clipitems in a single track aren't reliably importable.
-        Keep all original clips and their links. Additional tracks are inserted adjacent
-        to the original and link trackindex / clipindex are updated.
+        Interval-partition video/audio independently across ALL source tracks,
+        reusing free lanes globally. Preserve per-track audio routing, other
+        track metadata, opaque transitions, and FCP7 link track/clip indices.
         """
         if self._export_cache is not None:
             return self._export_cache
@@ -261,63 +261,128 @@ class Project:
             duration_node.text = str(maxend)
 
         self.lanes_added = 0
+        self.tracks_compacted = 0
         clip_position = {}  # uid -> (mediatype, 1-based track, 1-based clip index)
         for kind in ('video', 'audio'):
             media = self.seq.find(f'./media/{kind}')
             if media is None:
                 continue
+
             original_tracks = list(media.findall('track'))
-            # Group by original track index. Do not rely on element equality for clip IDs.
-            track_clips = defaultdict(list)
-            for c in self.clips:
-                if c.kind == kind:
-                    track_clips[c.track_no].append(c)
+            kind_clips = [c for c in self.clips if c.kind == kind]
+            parsed_element_ids = {id(c.element) for c in kind_clips}
+            # Distinct source tracks can share a destination lane when they
+            # have equivalent channel/enable/lock/format metadata. In
+            # particular, do NOT merge L/R audio channel tracks with distinct
+            # outputchannelindex values.
+            def metadata_key(track):
+                template = copy.deepcopy(track)
+                for child in list(template):
+                    if child.tag in ('clipitem', 'transitionitem'):
+                        template.remove(child)
+                for node in template.iter():
+                    if node.text is not None and not node.text.strip():
+                        node.text = None
+                    if node.tail is not None and not node.tail.strip():
+                        node.tail = None
+                return ET.tostring(template, encoding='utf-8')
+
+            keys = {}
+            protected = set()
+            for index, track in enumerate(original_tracks, 1):
+                # Unparsed clipitems and transition XML must stay on the
+                # original track. Isolate these tracks from global reuse so
+                # their special content is never dropped or moved elsewhere.
+                opaque = any(
+                    node.tag == 'transitionitem' or
+                    (node.tag == 'clipitem' and id(node) not in parsed_element_ids)
+                    for node in track
+                )
+                if opaque:
+                    protected.add(index)
+                    keys[index] = ('protected', index)
+                else:
+                    keys[index] = ('compatible', metadata_key(track))
+
+            # Interval-partition ALL compatible source tracks together, not
+            # each old track individually. With half-open [start,end) frame
+            # intervals, one track is created only when every compatible
+            # destination lane is occupied. This minimizes track count per
+            # metadata class while keeping each clip's timecode unchanged.
+            lanes = []
+            for c in sorted(kind_clips, key=lambda c: (
+                    int(c.element.findtext('start')),
+                    int(c.element.findtext('end')), c.track_no, c.uid)):
+                st = int(c.element.findtext('start'))
+                en = int(c.element.findtext('end'))
+                key = keys[c.track_no]
+                reusable = [
+                    lane for lane in lanes
+                    if lane['key'] == key and lane['end'] <= st
+                ]
+                # Prefer the lane previously used by this original source
+                # track when possible, for a more familiar editing layout.
+                lane = next((lane for lane in reusable
+                             if lane['last_source'] == c.track_no), None)
+                if lane is None and reusable:
+                    lane = min(reusable, key=lambda lane: lane['index'])
+                if lane is None:
+                    lane = {'key': key, 'index': len(lanes),
+                            'source': c.track_no, 'last_source': c.track_no,
+                            'end': en, 'clips': []}
+                    lanes.append(lane)
+                lane['clips'].append(c)
+                lane['end'] = en
+                lane['last_source'] = c.track_no
+
+            # Keep transition-only or other nonstandard original tracks
+            # without parsed clips; silently deleting them would lose XML.
+            for i in sorted(protected):
+                if not any(lane['source'] == i for lane in lanes):
+                    lanes.append({'key': keys[i], 'index': len(lanes),
+                                  'source': i, 'last_source': i,
+                                  'end': 0, 'clips': []})
+
             new_tracks = []
-            for original_index, original_track in enumerate(original_tracks, 1):
-                cs = sorted(track_clips.get(original_index, []),
-                            key=lambda c: (int(c.element.findtext('start')), int(c.element.findtext('end'))))
-                lanes = []
-                lane_ends = []
-                for c in cs:
-                    st = int(c.element.findtext('start'))
-                    en = int(c.element.findtext('end'))
-                    lane_index = next((i for i, end in enumerate(lane_ends) if end <= st), None)
-                    if lane_index is None:
-                        lane_index = len(lanes)
-                        lanes.append([])
-                        lane_ends.append(en)
-                    lanes[lane_index].append(c)
-                    lane_ends[lane_index] = en
-                # Retain unmodified track metadata (e.g. enabled / audio outputchannelindex).
-                # Original transitions aren't rearranged; users should avoid edits/transitions.
-                if not lanes:
-                    lanes = [[]]
-                for i, lane in enumerate(lanes):
-                    if i == 0:
-                        track = original_track
-                    else:
-                        track = copy.deepcopy(original_track)
-                        for node in list(track):
-                            if node.tag in ('clipitem', 'transitionitem'):
-                                track.remove(node)
-                        self.lanes_added += 1
-                    if i == 0:
-                        for node in list(track):
-                            if node.tag == 'clipitem':
-                                track.remove(node)
-                    for c in lane:
-                        track.append(c.element)
-                        # Premiere uses one-based trackindex and clipindex in clipitem links.
-                        clip_position[c.uid] = (kind, len(new_tracks) + 1,
-                                                lane.index(c) + 1)
-                    new_tracks.append(track)
-            # Restore other media properties in place; replace only track siblings.
-            existing = list(media)
-            first = next((i for i, node in enumerate(existing) if node.tag == 'track'), len(existing))
-            for t in original_tracks:
-                media.remove(t)
-            for offset, t in enumerate(new_tracks):
-                media.insert(first + offset, t)
+            protected_written = set()
+            for lane in lanes:
+                original_index = lane['source']
+                original_track = original_tracks[original_index - 1]
+                track = copy.deepcopy(original_track)
+                first_protected_lane = (
+                    original_index in protected and
+                    original_index not in protected_written
+                )
+                if first_protected_lane:
+                    protected_written.add(original_index)
+                # Strip old parsed clipitems, preserving any *unparsed*
+                # clipitems/transitionitems only in their protected lane.
+                for original_node, copied_node in zip(
+                        list(original_track), list(track)):
+                    if original_node.tag == 'clipitem':
+                        if (id(original_node) in parsed_element_ids or
+                                not first_protected_lane):
+                            track.remove(copied_node)
+                    elif original_node.tag == 'transitionitem':
+                        if not first_protected_lane:
+                            track.remove(copied_node)
+                for clip_idx, c in enumerate(lane['clips'], 1):
+                    track.append(c.element)
+                    # FCP7 link references must point to the newly assigned
+                    # lane/clip index; linked video/audio stays connected.
+                    clip_position[c.uid] = (kind, len(new_tracks) + 1, clip_idx)
+                new_tracks.append(track)
+
+            # Preserve any non-track <media> children (including format).
+            old_children = list(media)
+            first = next((i for i, node in enumerate(old_children)
+                          if node.tag == 'track'), len(old_children))
+            for track in original_tracks:
+                media.remove(track)
+            for offset, track in enumerate(new_tracks):
+                media.insert(first + offset, track)
+            self.lanes_added += max(0, len(new_tracks) - len(original_tracks))
+            self.tracks_compacted += max(0, len(original_tracks) - len(new_tracks))
 
         for c in self.clips:
             for l in c.element.findall('./link'):
