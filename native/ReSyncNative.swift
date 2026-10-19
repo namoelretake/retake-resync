@@ -137,7 +137,7 @@ final class ReSyncAppDelegate: NSObject, NSApplicationDelegate, WKNavigationDele
             let base = file.deletingLastPathComponent().standardizedFileURL.path
             guard base == home || base.hasPrefix(home + "/"),
                   file.lastPathComponent.range(
-                    of: #"^resync_[0-9a-f]{24}\\.job\\.json$"#,
+                    of: #"^resync_[0-9a-f]{24}\.job\.json$"#,
                     options: .regularExpression) != nil,
                   FileManager.default.fileExists(atPath: file.path) else { continue }
             if !appDidFinishLaunching {
