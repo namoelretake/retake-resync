@@ -24,7 +24,7 @@ class TestAppIcon(unittest.TestCase):
     def test_version_and_interface_agree(self):
         plist = (ROOT / "build" / "Info.plist").read_text(encoding="utf-8")
         html = (ROOT / "source" / "index.html").read_text(encoding="utf-8")
-        match = re.search(r'<key>CFBundleShortVersionString</key><string>([0-9]+\\.[0-9]+\\.[0-9]+)</string>', plist)
+        match = re.search(r'<key>CFBundleShortVersionString</key><string>([0-9]+\.[0-9]+\.[0-9]+)</string>', plist)
         self.assertIsNotNone(match)
         version = match.group(1)
         self.assertRegex(plist, r'<key>CFBundleVersion</key><string>[1-9][0-9]*</string>')
