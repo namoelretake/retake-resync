@@ -135,7 +135,10 @@ final class ReSyncAppDelegate: NSObject, NSApplicationDelegate, WKNavigationDele
             let file = URL(fileURLWithPath: path).standardizedFileURL
             let home = FileManager.default.homeDirectoryForCurrentUser.standardizedFileURL.path
             let base = file.deletingLastPathComponent().standardizedFileURL.path
-            guard base == home || base.hasPrefix(home + "/"),
+            // Premiere editors frequently use external SSDs (/Volumes).
+            // Accept only ordinary local user/workspace folders.
+            let allowed = [home, "/Volumes", "/private/var/folders", "/tmp"]
+            guard allowed.contains(where: { base == $0 || base.hasPrefix($0 + "/") }),
                   file.lastPathComponent.range(
                     of: #"^resync_[0-9a-f]{24}\.job\.json$"#,
                     options: .regularExpression) != nil,
