@@ -43,3 +43,9 @@ footer { text-align:center;line-height:1.6;font-size:9px;letter-spacing:1px;marg
 .progress-fill{height:100%;width:0%;background:#e5e5e8;transition:width .22s ease}
 .advanced{display:flex;align-items:center;justify-content:space-between;gap:4px;margin-top:15px;flex-wrap:wrap}
 .advanced .text-button{font-size:10px;color:#9fa0a5;padding:5px 2px;text-decoration:underline;text-underline-offset:3px}
+
+/* Beta bridge diagnostics: never leave a disabled panel with no way out. */
+.stop-button{display:block;margin:10px auto 0;padding:7px 13px;color:#e1e2e4;background:transparent;border:1px solid #666870;border-radius:8px;font-size:11px;cursor:pointer}
+.stop-button:hover{background:#292a2e}
+.stop-button[hidden]{display:none}
+.helper-note{margin:12px 4px 0;font-size:10px;line-height:1.5;color:#a2a4aa}
