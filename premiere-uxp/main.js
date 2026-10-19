@@ -12,10 +12,45 @@ const { entrypoints, storage, shell } = require('uxp');
 
 const FOLDER_KEY = 'resync.premiere.workspace.v1';
 const POLL_MS = 1300;
+const BRIDGE_LAUNCH_TIMEOUT_MS = 25_000;
+const BRIDGE_START_TIMEOUT_MS = 35_000;
 const JOB_TIMEOUT_MS = 90 * 60 * 1000;
 
 let busy = false;
 let activeSequence = null;
+let currentSync = null;
+
+function newSyncRun() {
+  const run = {cancelled:false, rejectCancel:null};
+  run.cancelledPromise = new Promise((_, reject) => {run.rejectCancel = reject;});
+  // The user may interrupt before the first await. Keep the cancellation
+  // Promise handled even when no race is currently awaiting it.
+  run.cancelledPromise.catch(() => {});
+  run.stop = () => {
+    if (run.cancelled) return;
+    run.cancelled = true;
+    run.rejectCancel(Error('Espera interrompida. A sequência original está intacta. Se o motor já iniciou, ele pode continuar analisando em segundo plano.'));
+  };
+  return run;
+}
+
+async function withTimeout(operation, run, milliseconds, message) {
+  let timer;
+  const deadline = new Promise((_, reject) => {
+    timer = setTimeout(() => reject(Error(message)), milliseconds);
+  });
+  try {
+    return await Promise.race([Promise.resolve().then(operation), run.cancelledPromise, deadline]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+function stopWaiting() {
+  if (!currentSync) return;
+  currentSync.stop();
+  status('Interrompendo a espera…');
+}
 const el = id => document.getElementById(id);
 
 function status(message, kind) {
@@ -54,6 +89,7 @@ function setBusy(value) {
   el('export-xml').disabled = busy || !activeSequence;
   el('sync').disabled = busy || !activeSequence;
   el('change-workspace').disabled = busy;
+  el('stop-wait').hidden = !busy || !currentSync;
 }
 
 async function getSequenceContext() {
@@ -165,12 +201,16 @@ async function readJobStatus(folder, name, id) {
   }
 }
 
-async function waitForSync(folder, statusName, id, timeout=JOB_TIMEOUT_MS) {
-  const deadline = Date.now() + timeout;
+async function waitForSync(folder, statusName, id, run, timeout=JOB_TIMEOUT_MS) {
+  const began = Date.now();
+  const deadline = began + timeout;
   let lastMessage = '';
+  let hasStarted = false;
   while (Date.now() < deadline) {
+    if (run.cancelled) throw Error('Espera interrompida.');
     const state = await readJobStatus(folder, statusName, id);
     if (state) {
+      hasStarted = true;
       if (state.message && state.message !== lastMessage) {
         lastMessage = state.message;
         status('Sincronizando: ' + lastMessage);
@@ -178,10 +218,15 @@ async function waitForSync(folder, statusName, id, timeout=JOB_TIMEOUT_MS) {
       progress(state.percent);
       if (state.state === 'error') throw Error(state.message || 'Falha no motor ReSync.');
       if (state.state === 'done') return state;
+    } else if (!hasStarted && Date.now() - began > BRIDGE_START_TIMEOUT_MS) {
+      throw Error('O motor não iniciou. Instale o ReSync.app Beta compatível em Aplicativos (a versão pública 0.6.6 não possui essa integração). Não escolha um arquivo JSON na janela do macOS; ela indica que o endereço resync:// não foi associado ao aplicativo.');
     }
-    await new Promise(resolve => setTimeout(resolve, POLL_MS));
+    await Promise.race([
+      new Promise(resolve => setTimeout(resolve, POLL_MS)),
+      run.cancelledPromise
+    ]);
   }
-  throw Error('O ReSync não respondeu. Verifique se a versão compatível do ReSync.app está instalada em Aplicativos.');
+  throw Error('A sincronização excedeu o limite de tempo. Confira a pasta de trabalho e os arquivos de mídia.');
 }
 
 async function importNewSequence(project, xmlPath, expectedName) {
@@ -209,6 +254,8 @@ async function importNewSequence(project, xmlPath, expectedName) {
 
 async function syncSequence() {
   if (busy || !activeSequence) return;
+  const run = newSyncRun();
+  currentSync = run;
   setBusy(true);
   progress(0);
   try {
@@ -242,12 +289,16 @@ async function syncSequence() {
 
     status('Iniciando motor do ReSync em segundo plano…');
     const url = 'resync://sync?job=' + encodeURIComponent(jobFile.nativePath);
-    const launched = await shell.openExternal(
-      url, 'O ReSync precisa abrir seu motor local para sincronizar os áudios desta sequência.'
+    const launched = await withTimeout(
+      () => shell.openExternal(url,
+        'Autorize abrir o ReSync.app Beta. NÃO selecione um arquivo JSON nem outro programa.'),
+      run, BRIDGE_LAUNCH_TIMEOUT_MS,
+      'O macOS não confirmou a abertura do ReSync. Verifique se o ReSync.app Beta está instalado em Aplicativos. Feche qualquer janela pedindo para escolher um arquivo JSON.'
     );
     if (launched) throw Error('O macOS não conseguiu iniciar o ReSync: ' + launched);
 
-    const result = await waitForSync(folder, statusName, id);
+    status('Aguardando a confirmação do motor ReSync…');
+    const result = await waitForSync(folder, statusName, id, run);
     if (result.output !== outputName || !result.sequence_name) {
       throw Error('Resultado da sincronização não corresponde à solicitação.');
     }
@@ -257,6 +308,11 @@ async function syncSequence() {
       throw Error('O projeto ativo mudou durante a análise. O XML sincronizado está na pasta: ' + folder.nativePath);
     }
 
+    if (run.cancelled) throw Error('Espera interrompida; o XML pode estar salvo na pasta de trabalho.');
+    // Import is a Premiere transaction: once it starts, do not advertise a
+    // cancellation that cannot roll back partial project changes.
+    currentSync = null;
+    el('stop-wait').hidden = true;
     progress(100);
     status('Importando a nova sequência no Premiere…');
     const newSequence = await importNewSequence(project,
@@ -267,6 +323,7 @@ async function syncSequence() {
     console.error('ReSync: sincronização pelo painel', error);
     status('Não foi possível concluir: ' + (error.message || error), 'error');
   } finally {
+    if (currentSync === run) currentSync = null;
     setBusy(false);
   }
 }
@@ -274,6 +331,7 @@ async function syncSequence() {
 el('refresh').addEventListener('click', refreshSequence);
 el('export-xml').addEventListener('click', exportSequenceXML);
 el('sync').addEventListener('click', syncSequence);
+el('stop-wait').addEventListener('click', stopWaiting);
 el('change-workspace').addEventListener('click', changeWorkspace);
 
 entrypoints.setup({
