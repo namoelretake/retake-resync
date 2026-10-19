@@ -9,8 +9,11 @@ const MAIN = readFileSync(path.join(ROOT, 'main.js'), 'utf8');
 const MANIFEST = JSON.parse(readFileSync(path.join(ROOT, 'manifest.json'), 'utf8'));
 async function flush() { for(let i=0;i<12;i++)await new Promise(r=>setImmediate(r)); }
 
-function setup({hasProject=true,folder='/tmp/resync',exportOK=true,importOK=true,jobError=false}={}) {
-  const ids=['status','refresh','export-xml','sync','change-workspace','progress-track','progress-fill',
+function setup({hasProject=true,folder='/tmp/resync',exportOK=true,importOK=true,jobError=false,
+  neverStarts=false,launchHangs=false}={}) {
+  let simulatedClock = Date.now();
+  class MockDate extends Date { static now() { return simulatedClock; } }
+  const ids=['status','refresh','export-xml','sync','change-workspace','stop-wait','progress-track','progress-fill',
     'project-name','sequence-name','video-count','audio-count'];
   const elements=new Map(ids.map(id=>[id,{
     id,textContent:'',className:'',disabled:false,hidden:true,style:{width:'0%'},
@@ -47,6 +50,7 @@ function setup({hasProject=true,folder='/tmp/resync',exportOK=true,importOK=true
     }},
     async getEntry(name){
       if(name.endsWith('.status.json')){
+        if (neverStarts) throw Error('Worker not registered');
         const id=/resync_([0-9a-f]{24})\.status\.json/.exec(name)[1];
         const job=jobs.get('resync_'+id+'.job.json');
         if(!job)throw Error('Job not ready');
@@ -73,14 +77,22 @@ function setup({hasProject=true,folder='/tmp/resync',exportOK=true,importOK=true
       async getEntryForPersistentToken(){return folderObj}
     }},
     shell:{async openExternal(url,reason){
-      calls.push({action:'launch',url,reason});return '';
+      calls.push({action:'launch',url,reason});
+      if(launchHangs) return new Promise(()=>{});
+      return '';
     }}
   };
   vm.runInNewContext(MAIN,{
     require(id){if(id==='premierepro')return premiere;if(id==='uxp')return uxp;
       throw Error('Unexpected module '+id)},
     document:{getElementById(id){assert.ok(elements.has(id),'Missing element '+id);return elements.get(id)}},
-    localStorage,console,Date,Math,setTimeout(fn){fn()}
+    localStorage,console,Date:MockDate,Math,
+    setTimeout(fn,ms){
+      if(ms > 2000) return global.setTimeout(fn, ms);
+      simulatedClock += ms;
+      return setImmediate(fn);
+    },
+    clearTimeout(handle){global.clearTimeout(handle);clearImmediate(handle);}
   },{filename:'main.js'});
   return {elements,calls,project,getEntries(){return entries},setProject(x){current=x},
           getImported(){return imported},getSource(){return appSource},getActive(){return currentSequence}};
@@ -144,4 +156,26 @@ test('A canceled workspace picker does not export or import',async()=>{
 test('No active project means synchronization is disabled',async()=>{
   const app=setup({hasProject:false});await flush();
   assert.equal(app.elements.get('sync').disabled,true);
+});
+
+test('If the native bridge is missing, it errors promptly instead of waiting 90 minutes',async()=>{
+  const app=setup({neverStarts:true});await flush();
+  await app.elements.get('sync').listeners.click();await flush();
+  assert.equal(app.calls.filter(c=>c.action==='import').length,0);
+  assert.equal(app.elements.get('sync').disabled,false);
+  assert.equal(app.elements.get('stop-wait').hidden,true);
+  assert.match(app.elements.get('status').textContent,/versão pública 0.6.6 não possui essa integração/);
+  assert.equal(app.getActive(),app.getSource());
+});
+
+test('User can interrupt waiting for the bridge without altering project',async()=>{
+  const app=setup({launchHangs:true});await flush();
+  const waiting=app.elements.get('sync').listeners.click();await flush();
+  assert.equal(app.elements.get('stop-wait').hidden,false);
+  app.elements.get('stop-wait').listeners.click();
+  await waiting;await flush();
+  assert.equal(app.elements.get('sync').disabled,false);
+  assert.equal(app.getImported().length,0);
+  assert.equal(app.getActive(),app.getSource());
+  assert.match(app.elements.get('status').textContent,/Espera interrompida/);
 });
