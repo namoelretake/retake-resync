@@ -366,7 +366,10 @@ class Project:
                     elif original_node.tag == 'transitionitem':
                         if not first_protected_lane:
                             track.remove(copied_node)
-                for clip_idx, c in enumerate(lane['clips'], 1):
+                # Special protected lanes may retain opaque clipitems that
+                # precede the moved clips. They count toward FCP7 clipindex.
+                retained_count = len(track.findall('clipitem'))
+                for clip_idx, c in enumerate(lane['clips'], retained_count + 1):
                     track.append(c.element)
                     # FCP7 link references must point to the newly assigned
                     # lane/clip index; linked video/audio stays connected.
