@@ -1,0 +1,40 @@
+name: ReSync — painel Premiere UXP
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'premiere-uxp/**'
+      - '.github/workflows/premiere-plugin.yml'
+  pull_request:
+    paths:
+      - 'premiere-uxp/**'
+      - '.github/workflows/premiere-plugin.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Validar manifest e JavaScript
+        run: |
+          python3 -m json.tool premiere-uxp/manifest.json > /dev/null
+          node --check premiere-uxp/main.js
+      - name: Testar integração simulada com Premiere
+        run: node --test premiere-uxp/tests/*.test.cjs
+      - name: Empacotar protótipo para UXP Developer Tool
+        run: |
+          cd premiere-uxp
+          zip -r ../ReSync-Premiere-UXP-Preview.zip manifest.json index.html styles.css main.js icons
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ReSync-Premiere-UXP-Preview
+          path: ReSync-Premiere-UXP-Preview.zip
+          if-no-files-found: error

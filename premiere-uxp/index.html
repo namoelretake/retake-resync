@@ -1,0 +1,49 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>ReSync — Premiere</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <main class="plugin-panel">
+    <header class="header">
+      <div class="brand-row">
+        <div class="logo" aria-hidden="true">R.</div>
+        <div><h1>ReSync</h1><div class="caption">by Retake <span class="middle-dot">·</span> Premiere</div></div>
+      </div>
+      <span class="version">PREVIEW 0.1</span>
+    </header>
+
+    <section class="intro">
+      <div class="eyebrow">MULTICÂMERA <span class="divider-dot">/</span> ÁUDIO</div>
+      <h2>Uma timeline.<br />Tudo em sintonia.</h2>
+      <p>Conecte o ReSync à sequência aberta no Premiere Pro.</p>
+    </section>
+
+    <section class="project-card" aria-labelledby="project-heading">
+      <div class="section-head">
+        <span id="project-heading">SEQUÊNCIA ATIVA</span>
+        <button type="button" id="refresh" class="text-button" aria-label="Atualizar informações da sequência">Atualizar ↻</button>
+      </div>
+      <div class="sequence-name" id="sequence-name">Procurando sequência…</div>
+      <div class="project-name" id="project-name">Aguardando Premiere</div>
+      <div class="track-summary">
+        <div class="track"><span id="video-count">—</span><small>PISTAS DE VÍDEO</small></div>
+        <div class="vertical-rule"></div>
+        <div class="track"><span id="audio-count">—</span><small>PISTAS DE ÁUDIO</small></div>
+      </div>
+    </section>
+
+    <section class="actions">
+      <button type="button" id="export-xml" class="primary-button" disabled>Exportar XML da sequência <span aria-hidden="true">↗</span></button>
+      <p class="hint">Esta versão prepara o XML para o ReSync.app. A sequência original não será modificada.</p>
+    </section>
+
+    <div id="status" class="status" role="status" aria-live="polite">Aguardando conexão com o Premiere…</div>
+    <footer>PRÓXIMO PASSO: SINCRONIZAÇÃO DIRETA NO PAINEL</footer>
+  </main>
+  <script src="main.js"></script>
+</body>
+</html>
