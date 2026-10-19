@@ -23,6 +23,12 @@ final class ReSyncAppDelegate: NSObject, NSApplicationDelegate, WKNavigationDele
     private var outputBuffer = ""
     private var closing = false
     private var updaterController: SPUStandardUpdaterController?
+    private var pendingBridgeJobs: [String] = []
+    private var bridgeWorkers: [Process] = []
+    private var launchDate = Date()
+    private var bridgeOnlyLaunch = false
+    private var appDidFinishLaunching = false
+
 
     private var bundleRoot: URL {
         if let root = ProcessInfo.processInfo.environment["RESYNC_BUNDLE_ROOT"] {
@@ -32,6 +38,17 @@ final class ReSyncAppDelegate: NSObject, NSApplicationDelegate, WKNavigationDele
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        appDidFinishLaunching = true
+        // macOS may deliver a custom URL before the app has fully launched.
+        // In this case run only the background worker, with no ReSync window.
+        if !pendingBridgeJobs.isEmpty {
+            bridgeOnlyLaunch = true
+            NSApp.setActivationPolicy(.accessory)
+            let jobs = pendingBridgeJobs
+            pendingBridgeJobs.removeAll()
+            jobs.forEach { startBridgeJob(at: $0) }
+            return
+        }
         NSApp.setActivationPolicy(.regular)
         let iconFile = bundleRoot.appendingPathComponent("Contents/Resources/ReSyncIcon.png")
         if let icon = NSImage(contentsOf: iconFile) { NSApp.applicationIconImage = icon }
@@ -105,6 +122,71 @@ final class ReSyncAppDelegate: NSObject, NSApplicationDelegate, WKNavigationDele
     // Sparkle manages downloading, cryptographic verification, replacement
     // and restart. It is intentionally disabled until the release feed and
     // EdDSA public key have been configured for this app bundle.
+    // Premiere UXP can launch a custom URL scheme after user consent.
+    // A JSON job file and an XML file are passed through a folder chosen
+    // by the user. No insecure HTTP localhost requests are required.
+    func application(_ application: NSApplication, open urls: [URL]) {
+        for url in urls {
+            guard let parts = URLComponents(url: url, resolvingAgainstBaseURL: false),
+                  parts.scheme?.lowercased() == "resync",
+                  parts.host?.lowercased() == "sync",
+                  let path = parts.queryItems?.first(where: { $0.name == "job" })?.value,
+                  path.hasPrefix("/") else { continue }
+            let file = URL(fileURLWithPath: path).standardizedFileURL
+            let home = FileManager.default.homeDirectoryForCurrentUser.standardizedFileURL.path
+            let base = file.deletingLastPathComponent().standardizedFileURL.path
+            guard base == home || base.hasPrefix(home + "/"),
+                  file.lastPathComponent.range(
+                    of: #"^resync_[0-9a-f]{24}\\.job\\.json$"#,
+                    options: .regularExpression) != nil,
+                  FileManager.default.fileExists(atPath: file.path) else { continue }
+            if !appDidFinishLaunching {
+                pendingBridgeJobs.append(file.path)
+            } else {
+                if Date().timeIntervalSince(launchDate) < 8 && bridgeWorkers.isEmpty {
+                    bridgeOnlyLaunch = true
+                    window?.orderOut(nil)
+                    NSApp.setActivationPolicy(.accessory)
+                }
+                startBridgeJob(at: file.path)
+            }
+        }
+    }
+
+    private func startBridgeJob(at path: String) {
+        let resources = bundleRoot.appendingPathComponent("Contents/Resources", isDirectory: true)
+        let worker = resources.appendingPathComponent("backend/resync-server/resync-server")
+        guard FileManager.default.isExecutableFile(atPath: worker.path) else { return }
+        let process = Process()
+        process.executableURL = worker
+        process.arguments = ["--resync-job", path]
+        process.currentDirectoryURL = worker.deletingLastPathComponent()
+        var environment = ProcessInfo.processInfo.environment
+        let tools = resources.appendingPathComponent("bin").path
+        environment["PATH"] = tools + ":/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:" + (environment["PATH"] ?? "")
+        environment["PYTHONUNBUFFERED"] = "1"
+        process.environment = environment
+        process.standardOutput = FileHandle.nullDevice
+        process.standardError = FileHandle.nullDevice
+        bridgeWorkers.append(process)
+        process.terminationHandler = { [weak self] finished in
+            DispatchQueue.main.async {
+                guard let self = self else { return }
+                self.bridgeWorkers.removeAll { $0 === finished }
+                if self.bridgeOnlyLaunch && self.bridgeWorkers.isEmpty {
+                    NSApp.terminate(nil)
+                }
+            }
+        }
+        do { try process.run() }
+        catch {
+            bridgeWorkers.removeAll { $0 === process }
+            // The UXP panel times out with a useful error if the worker fails.
+            NSLog("ReSync bridge could not start: %@", error.localizedDescription)
+            if bridgeOnlyLaunch && bridgeWorkers.isEmpty { NSApp.terminate(nil) }
+        }
+    }
+
     private func configureUpdater() {
         guard let key = Bundle.main.object(forInfoDictionaryKey: "SUPublicEDKey") as? String,
               !key.isEmpty,
