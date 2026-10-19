@@ -317,7 +317,14 @@ async function syncSequence() {
     status('Importando a nova sequência no Premiere…');
     const newSequence = await importNewSequence(project,
       joinFile(folder.nativePath, outputName), result.sequence_name);
-    status('Nova sequência pronta: ' + newSequence.name +
+    const tracks = result.summary || {};
+    const trackInfo = Number.isInteger(tracks.video_tracks) && Number.isInteger(tracks.audio_tracks)
+      ? ' · V' + tracks.video_tracks + ' / A' + tracks.audio_tracks
+      : '';
+    const savedInfo = Number.isInteger(tracks.tracks_compacted) && tracks.tracks_compacted > 0
+      ? ' · ' + tracks.tracks_compacted + ' pistas desnecessárias eliminadas'
+      : '';
+    status('Nova sequência pronta: ' + newSequence.name + trackInfo + savedInfo +
       '. A sequência original foi preservada.', 'success');
   } catch (error) {
     console.error('ReSync: sincronização pelo painel', error);
