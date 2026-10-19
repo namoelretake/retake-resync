@@ -104,11 +104,20 @@ def run_job(job_path: str | Path, sync_fn=sync) -> int:
         partial.write_bytes(data)
         os.replace(partial, target)
 
+        compacted = getattr(project, "tracks_compacted", 0)
+        videos = len(project.seq.findall("./media/video/track"))
+        audios = len(project.seq.findall("./media/audio/track"))
         state.update(state="done", percent=100,
-                     message=f"{result.get('total', 0)} takes processados. Abrindo sequência no Premiere...",
+                     message=(f"{result.get('total', 0)} takes processados · "
+                              f"V{videos}/A{audios} · {compacted} pistas desnecessárias eliminadas"),
                      sequence_name=unique_name,
-                     summary={k: result.get(k) for k in
-                              ("synced", "unmatched", "total", "verified_components", "collisions")},
+                     summary={
+                         **{k: result.get(k) for k in
+                            ("synced", "unmatched", "total", "verified_components", "collisions")},
+                         "tracks_compacted": compacted,
+                         "video_tracks": videos,
+                         "audio_tracks": audios,
+                     },
                      elapsed_s=round(time.monotonic() - started, 2))
         _atomic_status(status_file, state)
         return 0
