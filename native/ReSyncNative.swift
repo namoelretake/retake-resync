@@ -30,6 +30,67 @@ final class ReSyncAppDelegate: NSObject, NSApplicationDelegate, WKNavigationDele
     private var appDidFinishLaunching = false
 
 
+    // A WKWebView embedded in a custom NSApplication does not automatically
+    // receive the normal macOS Edit menu. In particular Command-V can fail
+    // even when a text field is focused. Standard menu actions are dispatched
+    // through the first responder (the focused editable field in WebKit).
+    private func installStandardEditMenu() {
+        let menu = NSMenu()
+        let appItem = NSMenuItem()
+        let appMenu = NSMenu()
+        appMenu.addItem(NSMenuItem(title: "Encerrar ReSync",
+                                  action: #selector(NSApplication.terminate(_:)),
+                                  keyEquivalent: "q"))
+        appItem.submenu = appMenu
+        menu.addItem(appItem)
+
+        let editItem = NSMenuItem()
+        let editMenu = NSMenu(title: "Editar")
+        for (title, action, key) in [
+            ("Recortar", "cut:", "x"),
+            ("Copiar", "copy:", "c"),
+            ("Colar", "paste:", "v"),
+            ("Selecionar Tudo", "selectAll:", "a")
+        ] {
+            let item = NSMenuItem(title: title,
+                                  action: NSSelectorFromString(action),
+                                  keyEquivalent: key)
+            item.keyEquivalentModifierMask = [.command]
+            editMenu.addItem(item)
+        }
+        editItem.submenu = editMenu
+        menu.addItem(editItem)
+        NSApp.mainMenu = menu
+    }
+
+    // The UI can request a native directory picker or a clipboard read
+    // explicitly. Return the selected path to the focused web input rather
+    // than asking the user to type a long /Volumes or /Users path.
+    private func sendMediaPathToUI(_ path: String) {
+        guard !path.isEmpty, path.count < 4096 else { return }
+        let payload: [String: String] = ["path": path]
+        guard let data = try? JSONSerialization.data(withJSONObject: payload),
+              let json = String(data: data, encoding: .utf8) else { return }
+        webView.evaluateJavaScript(
+            "window.dispatchEvent(new CustomEvent('resyncMediaPath', {detail: " + json + "}));",
+            completionHandler: nil
+        )
+    }
+
+    private func chooseMediaFolder() {
+        let panel = NSOpenPanel()
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = false
+        panel.allowsMultipleSelection = false
+        panel.canCreateDirectories = false
+        panel.prompt = "Usar esta pasta"
+        panel.message = "Escolha a pasta onde estão os vídeos e áudios do projeto."
+        panel.beginSheetModal(for: window) { [weak self] response in
+            guard response == .OK, let folder = panel.url else { return }
+            self?.sendMediaPathToUI(folder.path)
+        }
+    }
+
     private var bundleRoot: URL {
         if let root = ProcessInfo.processInfo.environment["RESYNC_BUNDLE_ROOT"] {
             return URL(fileURLWithPath: root, isDirectory: true)
@@ -50,6 +111,7 @@ final class ReSyncAppDelegate: NSObject, NSApplicationDelegate, WKNavigationDele
             return
         }
         NSApp.setActivationPolicy(.regular)
+        installStandardEditMenu()
         let iconFile = bundleRoot.appendingPathComponent("Contents/Resources/ReSyncIcon.png")
         if let icon = NSImage(contentsOf: iconFile) { NSApp.applicationIconImage = icon }
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1150, height: 790),
@@ -329,6 +391,16 @@ final class ReSyncAppDelegate: NSObject, NSApplicationDelegate, WKNavigationDele
               let action = body["action"] as? String else { return }
         if action == "checkUpdates" {
             checkForUpdates()
+            return
+        }
+        if action == "pasteMediaPath" {
+            if let value = NSPasteboard.general.string(forType: .string) {
+                sendMediaPathToUI(value.trimmingCharacters(in: .whitespacesAndNewlines))
+            }
+            return
+        }
+        if action == "chooseMediaFolder" {
+            chooseMediaFolder()
             return
         }
         guard action == "save",
