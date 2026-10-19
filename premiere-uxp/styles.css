@@ -37,3 +37,9 @@ h2 { font-size:clamp(25px,5vw,35px);font-weight:730;letter-spacing:-1.15px;line-
 .status.success { border-color:#56735e;color:#b8e0c1; }
 .status.error { border-color:#875657;color:#fac1c2; }
 footer { text-align:center;line-height:1.6;font-size:9px;letter-spacing:1px;margin-top:25px; }
+
+/* Embedded synchronization workflow, minimal and dock-friendly. */
+.progress-track{height:4px;margin-top:13px;background:#32343a;border-radius:3px;overflow:hidden}
+.progress-fill{height:100%;width:0%;background:#e5e5e8;transition:width .22s ease}
+.advanced{display:flex;align-items:center;justify-content:space-between;gap:4px;margin-top:15px;flex-wrap:wrap}
+.advanced .text-button{font-size:10px;color:#9fa0a5;padding:5px 2px;text-decoration:underline;text-underline-offset:3px}
