@@ -3,14 +3,20 @@
   "id": "com.retakefilmes.resync.premiere",
   "name": "ReSync for Premiere",
   "shortname": "ReSync",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "main": "index.html",
   "host": {
     "app": "premierepro",
     "minVersion": "26.2.0"
   },
   "requiredPermissions": {
-    "localFileSystem": "request"
+    "localFileSystem": "request",
+    "launchProcess": {
+      "schemes": [
+        "resync"
+      ],
+      "extensions": []
+    }
   },
   "entrypoints": [
     {
