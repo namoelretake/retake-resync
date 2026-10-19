@@ -67,6 +67,8 @@ jobs:
           otool -L saida/ReSync.app/Contents/MacOS/ReSync | grep Sparkle
           /usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" saida/ReSync.app/Contents/Info.plist
           ls -lh saida/ReSync-macOS.dmg || true
+      - name: Testar motor empacotado com áudio e XML sintéticos
+        run: python3 build/test_premiere_bridge_mac.py saida/ReSync.app
       - name: Disponibilizar artefatos não assinados
         uses: actions/upload-artifact@v4
         with:

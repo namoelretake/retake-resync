@@ -13,7 +13,7 @@
         <div class="logo" aria-hidden="true">R.</div>
         <div><h1>ReSync</h1><div class="caption">by Retake <span class="middle-dot">·</span> Premiere</div></div>
       </div>
-      <span class="version">PREVIEW 0.1</span>
+      <span class="version">BETA 0.4</span>
     </header>
 
     <section class="intro">
@@ -37,12 +37,23 @@
     </section>
 
     <section class="actions">
-      <button type="button" id="export-xml" class="primary-button" disabled>Exportar XML da sequência <span aria-hidden="true">↗</span></button>
-      <p class="hint">Esta versão prepara o XML para o ReSync.app. A sequência original não será modificada.</p>
+      <button type="button" id="sync" class="primary-button" disabled>
+        Sincronizar e criar sequência <span aria-hidden="true">↗</span>
+      </button>
+      <div class="progress-track" id="progress-track" hidden>
+        <div class="progress-fill" id="progress-fill"></div>
+      </div>
+      <button type="button" id="stop-wait" class="stop-button" hidden>Interromper espera</button>
+      <p class="hint">Cria uma nova sequência com os takes sincronizados. A original permanece intacta.</p>
+      <p class="helper-note">Requer o ReSync.app Beta com integração Premiere instalado em Aplicativos. A versão pública 0.6.6 ainda não inclui essa ponte.</p>
+      <div class="advanced">
+        <button type="button" id="export-xml" class="text-button" disabled>Exportar XML manualmente ↗</button>
+        <button type="button" id="change-workspace" class="text-button">Alterar pasta de trabalho</button>
+      </div>
     </section>
 
     <div id="status" class="status" role="status" aria-live="polite">Aguardando conexão com o Premiere…</div>
-    <footer>PRÓXIMO PASSO: SINCRONIZAÇÃO DIRETA NO PAINEL</footer>
+    <footer>RETAKE FILMES · SINCRONIZAÇÃO LOCAL</footer>
   </main>
   <script src="main.js"></script>
 </body>
