@@ -82,6 +82,14 @@ class TestParallelSync(unittest.TestCase):
         self.assertCountEqual(calls, ['one', 'two'])
         self.assertEqual(result[0]['comparisons'], 2)
 
+    def test_malformed_media_url_is_reported_unavailable(self):
+        p = project(('bad%00path',))
+        with patch('engine.shutil.which', return_value='/ffmpeg'):
+            result = sync(p)
+        self.assertEqual(result['unmatched'], 1)
+        self.assertEqual(result['comparisons'], 0)
+        self.assertIn('não localizado', result['groups'][0]['result'])
+
 
 if __name__ == '__main__':
     unittest.main()

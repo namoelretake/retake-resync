@@ -13,7 +13,7 @@ dos grupos. Não pula comparações para aparentar rapidez.
   e 256 entradas. Gravações grandes demais para o cache seguem pelo cálculo
   normal. O cache é liberado também em caso de erro.
 - Cache persistente local de assinaturas para novas tentativas. A identidade
-  inclui mídia, trecho, parâmetros de extração, versão do cache e executável
+  inclui mídia, trecho, parâmetros de extração, versões do cache/NumPy e executável
   FFmpeg. Alterar mídia ou decoder invalida a análise correspondente.
 - Caminhos canônicos calculados uma vez por grupo, em vez de consultar o
   sistema de arquivos em cada comparação.
@@ -93,3 +93,9 @@ Resultados e XML ficaram idênticos à base em todas as passagens. O cenário
 de 60 takes manteve 1.770 comparações e 20 blocos independentes. Com duas
 tarefas, a primeira análise do cenário AAC levou 1,152s; mantemos quatro
 como limite padrão. Estes números não preveem o tempo da mídia real do usuário.
+
+Também repetimos o cenário AAC usando o FFmpeg 7.1 do aplicativo instalado:
+base 1,347s / 1,313s, otimizado 0,475s / 0,0369s, novamente com resultado/XML
+idênticos. Isso mede o decoder empacotado, executando o motor Python desta
+branch; não mede a interface ou o Premiere. Variações entre rodadas reforçam
+que devemos validar o ganho com a mídia real antes de prometer um tempo final.

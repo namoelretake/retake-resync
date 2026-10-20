@@ -122,6 +122,7 @@ def create_fixture(folder: Path, scenario: str, media_format: str) -> dict:
             source_start = round(source_start * FPS) / FPS
             begin = round(source_start * SR)
             samples = master[begin:begin + duration * SR].copy()
+            assert len(samples) == duration * SR, "Fixture source is shorter than its XML duration"
             samples *= .55 + camera * .15
             if camera:
                 samples[1:] += samples[:-1] * camera * .12

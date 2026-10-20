@@ -493,7 +493,7 @@ class AudioCache:
     def _cache_path(self, key: tuple) -> Path | None:
         if self._cache_dir is None:
             return None
-        identity = (self.CACHE_VERSION, AUDIO_RATE, FEATURE_FPS, NFFT, HOP,
+        identity = (self.CACHE_VERSION, np.__version__, AUDIO_RATE, FEATURE_FPS, NFFT, HOP,
                     tuple(self.band_slices), self._decoder_identity, key)
         digest = hashlib.sha256(repr(identity).encode('utf-8', 'surrogatepass')).hexdigest()
         return self._cache_dir / (digest + '.npy')
@@ -880,7 +880,14 @@ def sync(project: Project, reference_track: str = 'auto', media_folder: str = ''
     reference_track = (reference_track if reference_track in available else
                        next((t for t in ranking if t.startswith('video-')), ranking[0]))
 
-    source_paths = {g.gid: os.path.realpath(g.path) if g.path else '' for g in groups}
+    source_paths = {}
+    for g in groups:
+        try:
+            source_paths[g.gid] = os.path.realpath(g.path) if g.path else ''
+        except (OSError, ValueError):
+            # A malformed media URL is unavailable, not a reason to abort all
+            # other takes while precomputing their file identities.
+            source_paths[g.gid] = g.path
 
     def independent(a, b):
         # Premiere tracks are editing lanes, not unique physical recording sources.
