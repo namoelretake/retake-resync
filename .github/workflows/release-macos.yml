@@ -11,7 +11,7 @@ on:
         description: "O que mudou nesta versão?"
         required: false
         type: string
-        default: "Melhorias e correções do ReSync."
+        default: ""
 
 permissions:
   contents: write

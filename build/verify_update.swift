@@ -21,6 +21,10 @@ do {
         fail("Sparkle archive signature does not match the embedded public key.")
     }
     print("Sparkle archive signature verified against the embedded public key.")
+    let keyHash = SHA256.hash(data: keyData).map { String(format: "%02x", $0) }.joined()
+    let archiveHash = SHA256.hash(data: archive).map { String(format: "%02x", $0) }.joined()
+    print("Sparkle public key SHA-256: \(keyHash)")
+    print("Sparkle archive SHA-256: \(archiveHash)")
 } catch {
     fail("Sparkle archive verification failed: \(error.localizedDescription)")
 }
