@@ -1,4 +1,5 @@
 """Persistent signatures must be identical, disposable and source-aware."""
+import hashlib
 import os
 from pathlib import Path
 import shutil
@@ -13,7 +14,7 @@ import wave
 import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from engine import AUDIO_RATE, AudioCache
+from engine import AUDIO_RATE, MUSIC_IDENTITY_BINS, AudioCache
 
 
 @unittest.skipUnless(shutil.which('ffmpeg'), 'FFmpeg required for extraction checks')
@@ -48,20 +49,62 @@ class TestAudioCache(unittest.TestCase):
         self.assertIsNotNone(result)
         return result
 
+    def write_checked_array(self, path, array):
+        with path.open('wb') as stream:
+            np.save(stream, array, allow_pickle=False)
+            stream.write(hashlib.sha256(memoryview(array).cast('B')).digest())
+
     def test_new_instance_reuses_identical_features_without_ffmpeg(self):
-        first = self.features(self.cache())
+        first_cache = self.cache()
+        first = self.features(first_cache)
+        first_identity = first_cache.verification_features(first)
+        self.assertIsNotNone(first_identity)
         self.assertEqual(len(list(self.directory.glob('*.npy'))), 1)
+        second_cache = self.cache()
         with patch('engine.subprocess.Popen', side_effect=AssertionError('cache should avoid FFmpeg')):
-            second = self.features(self.cache())
+            second = self.features(second_cache)
+        second_identity = second_cache.verification_features(second)
+        self.assertIsNotNone(second_identity)
         np.testing.assert_array_equal(first, second)
+        np.testing.assert_array_equal(first_identity, second_identity)
         self.assertEqual(second.dtype, np.float32)
         self.assertEqual(second.shape[1], 15)
+        self.assertEqual(second_identity.shape, (len(second), MUSIC_IDENTITY_BINS))
+        self.assertEqual(second_identity.dtype, np.float32)
+        self.assertTrue(second.flags.c_contiguous)
+        self.assertTrue(second_identity.flags.c_contiguous)
+        combined = np.load(next(self.directory.glob('*.npy')), allow_pickle=False)
+        self.assertEqual(combined.shape, (len(second), 15 + MUSIC_IDENTITY_BINS))
+        np.testing.assert_array_equal(second, combined[:, :15])
+        np.testing.assert_array_equal(second_identity, combined[:, 15:])
         self.assertEqual(list(self.directory.glob('*.tmp')), [])
 
     def test_cache_does_not_change_extracted_signatures(self):
-        original = self.features(AudioCache(cache_dir=False))
-        persisted = self.features(self.cache())
+        disabled_cache = AudioCache(cache_dir=False)
+        disk_cache = self.cache()
+        original = self.features(disabled_cache)
+        persisted = self.features(disk_cache)
         np.testing.assert_array_equal(original, persisted)
+        np.testing.assert_array_equal(disabled_cache.verification_features(original),
+                                      disk_cache.verification_features(persisted))
+
+    def test_identity_reuses_the_existing_fft_and_is_available_from_memory(self):
+        cache = self.cache()
+        with (patch('engine.np.fft.rfft', wraps=np.fft.rfft) as transform,
+              patch('engine.subprocess.Popen', wraps=subprocess.Popen) as decode):
+            features = self.features(cache)
+        self.assertEqual(decode.call_count, 1)
+        self.assertEqual(transform.call_count, 1)
+        fingerprint = cache.verification_features(features)
+        self.assertIsNotNone(fingerprint)
+        self.assertTrue(np.isfinite(fingerprint).all())
+        self.assertTrue((fingerprint >= 0).all())
+        np.testing.assert_allclose(np.linalg.norm(fingerprint, axis=1), 1, atol=1e-5)
+        with patch('engine.subprocess.Popen', side_effect=AssertionError('memory hit should avoid FFmpeg')):
+            self.assertIs(self.features(cache), features)
+            self.assertIs(cache.verification_features(features), fingerprint)
+        self.assertIsNone(cache.verification_features(np.zeros_like(features)))
+        self.assertIsNone(cache.verification_features(None))
 
     def test_changed_content_invalidates_memory_and_disk_even_with_preserved_mtime(self):
         cache = self.cache()
@@ -120,9 +163,9 @@ class TestAudioCache(unittest.TestCase):
         path = next(self.directory.glob('*.npy'))
         for content in (b'incomplete cache', None):
             if content is None:
-                corrupt = expected.copy()
+                corrupt = np.load(path, allow_pickle=False)
                 corrupt[0, 0] = np.nan
-                np.save(path, corrupt, allow_pickle=False)
+                self.write_checked_array(path, corrupt)
             else:
                 path.write_bytes(content)
             with patch('engine.subprocess.Popen', wraps=subprocess.Popen) as decode:
@@ -142,7 +185,7 @@ class TestAudioCache(unittest.TestCase):
             stream.write(bytes([first[0] ^ 1]) + first[1:])
         changed = np.load(path, allow_pickle=False)
         self.assertTrue(np.isfinite(changed).all())
-        self.assertFalse(np.array_equal(expected, changed))
+        self.assertFalse(np.array_equal(expected, changed[:, :15]))
         with patch('engine.subprocess.Popen', wraps=subprocess.Popen) as decode:
             recovered = self.features(self.cache())
         self.assertEqual(decode.call_count, 1)
@@ -150,12 +193,48 @@ class TestAudioCache(unittest.TestCase):
         with patch('engine.subprocess.Popen', side_effect=AssertionError('repaired cache should be reusable')):
             np.testing.assert_array_equal(expected, self.features(self.cache()))
 
+    def test_finite_identity_bit_flip_also_invalidates_the_whole_cache(self):
+        cache = self.cache()
+        expected = self.features(cache)
+        identity = cache.verification_features(expected)
+        path = next(self.directory.glob('*.npy'))
+        with path.open('r+b') as stream:
+            np.lib.format.read_magic(stream)
+            np.lib.format.read_array_header_1_0(stream)
+            offset = stream.tell() + 15 * 4
+            stream.seek(offset)
+            first = stream.read(4)
+            stream.seek(offset)
+            stream.write(bytes([first[0] ^ 1]) + first[1:])
+        corrupt = np.load(path, allow_pickle=False)
+        self.assertTrue(np.isfinite(corrupt).all())
+        np.testing.assert_array_equal(expected, corrupt[:, :15])
+        self.assertFalse(np.array_equal(identity, corrupt[:, 15:]))
+        repaired_cache = self.cache()
+        with patch('engine.subprocess.Popen', wraps=subprocess.Popen) as decode:
+            recovered = self.features(repaired_cache)
+        self.assertEqual(decode.call_count, 1)
+        np.testing.assert_array_equal(expected, recovered)
+        np.testing.assert_array_equal(identity, repaired_cache.verification_features(recovered))
+
+    def test_legacy_features_without_identity_are_redecoded(self):
+        expected = self.features(self.cache())
+        path = next(self.directory.glob('*.npy'))
+        self.write_checked_array(path, expected)
+        cache = self.cache()
+        with (patch('engine.np.load', side_effect=AssertionError('wrong width rejected before load')),
+              patch('engine.subprocess.Popen', wraps=subprocess.Popen) as decode):
+            recovered = self.features(cache)
+        self.assertEqual(decode.call_count, 1)
+        np.testing.assert_array_equal(expected, recovered)
+        self.assertIsNotNone(cache.verification_features(recovered))
+
     def test_huge_or_object_header_is_rejected_before_numpy_load(self):
         self.features(self.cache())
         path = next(self.directory.glob('*.npy'))
         invalid_headers = [
-            {'descr': '<f4', 'fortran_order': False, 'shape': (2 ** 40, 15)},
-            {'descr': '|O', 'fortran_order': False, 'shape': (100, 15)},
+            {'descr': '<f4', 'fortran_order': False, 'shape': (2 ** 40, 15 + MUSIC_IDENTITY_BINS)},
+            {'descr': '|O', 'fortran_order': False, 'shape': (100, 15 + MUSIC_IDENTITY_BINS)},
         ]
         for header in invalid_headers:
             with path.open('wb') as stream:
@@ -199,15 +278,15 @@ class TestAudioCache(unittest.TestCase):
         self.directory.mkdir()
         for index in range(4):
             path = self.directory / (f'{index:064x}' + '.npy')
-            np.save(path, np.ones((200, 15), dtype=np.float32), allow_pickle=False)
+            self.write_checked_array(path, np.ones((200, 15 + MUSIC_IDENTITY_BINS), dtype=np.float32))
             os.utime(path, (index + 1, index + 1))
         unrelated = self.directory / 'notes.txt'
         unrelated.write_text('leave this alone')
-        with patch.object(cache, 'MAX_CACHE_BYTES', 25000):
+        with patch.object(cache, 'MAX_CACHE_BYTES', 45000):
             cache._trim_disk_cache()
         signatures = list(self.directory.glob('*.npy'))
         self.assertEqual(len(signatures), 2)
-        self.assertLessEqual(sum(path.stat().st_size for path in signatures), 25000)
+        self.assertLessEqual(sum(path.stat().st_size for path in signatures), 45000)
         self.assertTrue((self.directory / (f'{3:064x}' + '.npy')).exists())
         self.assertEqual(unrelated.read_text(), 'leave this alone')
 

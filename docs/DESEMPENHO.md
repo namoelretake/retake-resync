@@ -35,6 +35,17 @@ atômica e não persiste análise de mídia alterada durante a extração.
 
 Aumentar `AudioCache.CACHE_VERSION` se mudar qualquer cálculo de assinatura.
 Os arquivos `.npy` do cache têm um rodapé de 32 bytes com o SHA-256 do payload.
+Desde a versão 0.6.11, o formato v3 guarda no mesmo arquivo 15 dimensões de
+busca e 12 dimensões de identidade tonal por instante. Os dois descritores
+vêm da mesma extração/FFT; a busca continua usando as 15 dimensões anteriores.
+O cache antigo é substituído automaticamente por novas análises compatíveis.
+
+Antes de unir takes em um bloco, o motor também compara a identidade tonal no
+trecho alinhado. Isso impede as falsas uniões reproduzidas com músicas que
+compartilham ritmo, mas têm conteúdo tonal diferente. O espaçamento de dez
+segundos entre blocos, as pontes de sobreposição reais e os critérios de busca
+continuam em uso. Essa confirmação adicional não é um reconhecimento infalível
+de canções ou de performances distintas de uma mesma composição.
 
 Variáveis para desenvolvimento e diagnóstico:
 

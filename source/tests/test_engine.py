@@ -187,7 +187,9 @@ class TestMulticam(unittest.TestCase):
             if ref==1 and curr==2: return (60.0,.90)
             if ref==1 and curr==3: return (20.0,.95)
             return None
-        with patch('engine.AudioCache.features', features), patch('engine.correlate_features',match):
+        with (patch('engine.AudioCache.features', features),
+              patch('engine.correlate_features', match),
+              patch('engine.confirm_audio_identity', return_value=True)):
             result=sync(project, 'audio-1', threshold=.6)
         first=next(g for g in project.groups if g.title=='first')
         second=next(g for g in project.groups if g.title=='second')
@@ -196,3 +198,4 @@ class TestMulticam(unittest.TestCase):
         self.assertEqual(second.status, "synced")
         self.assertAlmostEqual(second.assigned, 20)
         self.assertEqual(result['synced'],2)
+
