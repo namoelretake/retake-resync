@@ -1,5 +1,6 @@
 """Regression checks for ReSync 0.6.9 native media-folder entry and restart UX."""
 from pathlib import Path
+import plistlib
 import re
 import shutil
 import subprocess
@@ -65,11 +66,13 @@ class TestMediaFolderUX(unittest.TestCase):
         self.assertEqual(proc.returncode, 0, proc.stderr)
 
     def test_version_matches_app_bundle(self):
-        plist = (ROOT / "build" / "Info.plist").read_text(encoding="utf8")
-        self.assertIn("<key>CFBundleShortVersionString</key><string>0.6.9</string>", plist)
-        self.assertIn("<key>CFBundleVersion</key><string>9</string>", plist)
-        self.assertIn("ReSync <small>v0.6.9</small>", self.html)
+        info = plistlib.loads((ROOT / "build" / "Info.plist").read_bytes())
+        version = info["CFBundleShortVersionString"]
+        self.assertRegex(version, r"^[0-9]+\.[0-9]+\.[0-9]+$")
+        self.assertGreater(int(info["CFBundleVersion"]), 0)
+        self.assertIn(f"ReSync <small>v{version}</small>", self.html)
 
 
 if __name__ == "__main__":
     unittest.main()
+

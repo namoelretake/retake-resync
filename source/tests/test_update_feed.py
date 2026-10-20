@@ -1,6 +1,7 @@
 """Sparkle appcast contract tests (no network or macOS required)."""
 import base64
 import importlib.util
+import plistlib
 import tempfile
 import unittest
 import xml.etree.ElementTree as ET
@@ -30,6 +31,10 @@ class TestSparkleAppcast(unittest.TestCase):
         self.assertEqual(item.findtext("sparkle:version", namespaces=ns), "3")
         self.assertEqual(item.findtext("sparkle:shortVersionString", namespaces=ns), "0.6.3")
         self.assertEqual(item.findtext("sparkle:hardwareRequirements", namespaces=ns), "arm64")
+        info = plistlib.loads((SCRIPT.parent / "Info.plist").read_bytes())
+        minimum = item.findtext("sparkle:minimumSystemVersion", namespaces=ns)
+        self.assertEqual(tuple(int(v) for v in minimum.split('.'))[:2],
+                         tuple(int(v) for v in info['LSMinimumSystemVersion'].split('.'))[:2])
         enclosure = item.find("enclosure")
         self.assertEqual(enclosure.attrib["url"], self.url)
         self.assertEqual(enclosure.attrib["{%s}edSignature" % ns["sparkle"]], self.signature)
@@ -50,3 +55,4 @@ class TestSparkleAppcast(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+

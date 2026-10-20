@@ -76,7 +76,8 @@ FRAMEWORK_SRC="$(find "$SPARKLE_DIR" -maxdepth 3 -name Sparkle.framework -type d
 ditto "$FRAMEWORK_SRC" "$APP/Contents/Frameworks/Sparkle.framework"
 
 echo "Compilando janela nativa em WebKit + Sparkle…"
-xcrun swiftc -O -framework Cocoa -framework WebKit \
+DEPLOYMENT_TARGET=$(/usr/libexec/PlistBuddy -c 'Print :LSMinimumSystemVersion' "$APP/Contents/Info.plist")
+xcrun swiftc -O -target "$(uname -m)-apple-macos$DEPLOYMENT_TARGET" -framework Cocoa -framework WebKit \
   -F "$APP/Contents/Frameworks" -framework Sparkle \
   -Xlinker -rpath -Xlinker "@executable_path/../Frameworks" \
   "$BASE/native/ReSyncNative.swift" -o "$APP/Contents/MacOS/ReSync"
@@ -110,3 +111,4 @@ if [[ "${CI:-}" != "true" ]]; then
   open "$OUT"
   if [[ -t 0 ]]; then read -r -p "Pressione Enter para fechar..." _; fi
 fi
+

@@ -79,6 +79,10 @@ jobs:
           SIGNER="$GITHUB_WORKSPACE/.build-temp/Sparkle/bin/sign_update"
           test -x "$SIGNER"
           SIGNATURE=$("$SIGNER" -p -f "$KEY_FILE" "$ARCHIVE")
+          PUBLIC_KEY=$(/usr/libexec/PlistBuddy -c 'Print :SUPublicEDKey' "$PLIST")
+          xcrun swift -module-cache-path "$RUNNER_TEMP/resync-swift-cache" \
+            build/verify_update.swift "$ARCHIVE" "$SIGNATURE" "$PUBLIC_KEY"
+          test -s saida/ReSync-macOS.dmg
           URL="https://github.com/$GITHUB_REPOSITORY/releases/download/$TAG/$(basename "$ARCHIVE")"
           python3 build/create_appcast.py --version "$VERSION" --build "$BUILD" \
             --archive "$ARCHIVE" --signature "$SIGNATURE" --url "$URL" \
@@ -97,10 +101,16 @@ jobs:
             echo "::error::Release $RESYNC_TAG já existe. Aumente a versão antes de publicar outra."
             exit 1
           fi
-          if [[ -z "$RELEASE_NOTES" ]]; then
-            RELEASE_NOTES="ReSync 0.6.8: compactação global de pistas de vídeo e áudio, reutilizando espaços vazios sem sobrepor clipes; mantém sincronismo, vínculos e roteamento de áudio. Inclui a ponte local para o ReSync for Premiere, que pode criar uma nova sequência sincronizada. A sequência original permanece intacta. Aplicativo atualizado pelo Sparkle; o painel UXP Beta ainda precisa ser atualizado separadamente."
+          NOTES_FILE="$RUNNER_TEMP/resync-release-notes.md"
+          if [[ -n "$RELEASE_NOTES" ]]; then
+            printf '%s\n' "$RELEASE_NOTES" > "$NOTES_FILE"
+          elif [[ -f "docs/releases/$RESYNC_VERSION.md" ]]; then
+            cp "docs/releases/$RESYNC_VERSION.md" "$NOTES_FILE"
+          else
+            printf 'ReSync %s: melhorias e correções. Atualize em Preferências → Buscar atualizações.\n' "$RESYNC_VERSION" > "$NOTES_FILE"
           fi
           gh release create "$RESYNC_TAG" \
             "$RESYNC_ZIP" saida/ReSync-macOS.dmg saida/appcast.xml \
             --target "$GITHUB_SHA" --title "ReSync $RESYNC_VERSION" \
-            --notes "$RELEASE_NOTES" --latest
+            --notes-file "$NOTES_FILE" --latest
+
