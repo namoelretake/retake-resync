@@ -42,7 +42,7 @@ def appcast(version: str, build: str, archive: Path, signature: str, url: str) -
       <title>ReSync {esc(version)}</title>
       <sparkle:version>{esc(build)}</sparkle:version>
       <sparkle:shortVersionString>{esc(version)}</sparkle:shortVersionString>
-      <sparkle:minimumSystemVersion>12.0.0</sparkle:minimumSystemVersion>
+      <sparkle:minimumSystemVersion>15.0.0</sparkle:minimumSystemVersion>
       <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
       <enclosure url="{esc(url)}" sparkle:edSignature="{esc(signature)}"
                  length="{archive.stat().st_size}" type="application/octet-stream" />
@@ -68,3 +68,4 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+

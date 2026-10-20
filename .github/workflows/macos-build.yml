@@ -5,7 +5,7 @@ on:
     branches: [main]
     paths:
       - 'native/**'
-      - 'source/index.html'
+      - 'source/**'
       - 'build/**'
       - 'assets/**'
       - '.github/workflows/macos-build.yml'
@@ -13,7 +13,7 @@ on:
     branches: [main]
     paths:
       - 'native/**'
-      - 'source/index.html'
+      - 'source/**'
       - 'build/**'
       - 'assets/**'
       - '.github/workflows/macos-build.yml'
@@ -81,3 +81,4 @@ jobs:
 # Build manual para teste: pode consumir minutos cobrados no GitHub.
 # macos-15 usa runner Intel; a versão nativa arm64 deve ser compilada em um Mac Apple Silicon.
 # Não publica Release nem instala atualizações automaticamente.
+

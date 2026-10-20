@@ -11,6 +11,7 @@ import json
 import math
 import os
 import plistlib
+import re
 import subprocess
 import sys
 import tempfile
@@ -33,6 +34,21 @@ def run(bundle_path: Path) -> None:
     assert "resync" in schemes, "macOS bundle must register resync:// scheme"
     assert worker.is_file(), "PyInstaller worker missing"
     assert (ffmpeg_folder / "ffmpeg").is_file(), "Bundled ffmpeg missing"
+    # Never advertise an update for older macOS versions than the executable
+    # can launch on. The native target is explicitly set from Info.plist.
+    native_build = subprocess.run(
+        ['xcrun', 'vtool', '-show-build', str(bundle_path / 'Contents/MacOS/ReSync')],
+        check=True, capture_output=True, text=True,
+    ).stdout
+    minimums = re.findall(r'^\s*minos\s+([0-9.]+)', native_build, re.M)
+    assert minimums, "Native executable deployment target could not be checked"
+    def version_tuple(value):
+        parts = tuple(int(part) for part in value.split('.'))
+        return parts + (0,) * (3 - len(parts))
+    declared = version_tuple(plist['LSMinimumSystemVersion'])
+    assert all(version_tuple(value) <= declared for value in minimums), (
+        'Native executable requires newer macOS than Info.plist advertises'
+    )
 
     with tempfile.TemporaryDirectory(prefix="resync-bridge-test-") as temp:
         folder = Path(temp)
@@ -96,3 +112,4 @@ def run(bundle_path: Path) -> None:
 
 if __name__ == "__main__":
     run(Path(sys.argv[1]).resolve() if len(sys.argv) > 1 else Path("saida/ReSync.app").resolve())
+

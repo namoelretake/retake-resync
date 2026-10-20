@@ -7,16 +7,23 @@ from __future__ import annotations
 
 import copy
 import csv
+import hashlib
 import io
 import math
 import os
 import re
 import shutil
 import subprocess
+import sys
 import tempfile
+import threading
+import time
 import urllib.parse
 import xml.etree.ElementTree as ET
-from collections import defaultdict
+from collections import OrderedDict, defaultdict
+from contextlib import contextmanager
+from contextvars import ContextVar
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable
@@ -438,9 +445,28 @@ class Project:
 
 
 class AudioCache:
-    def __init__(self, report: Callable[[str], None] = lambda x: None):
+    # Bump this whenever feature extraction changes. Files contain signatures,
+    # never decoded audio, and can always be recreated from the source media.
+    CACHE_VERSION = 2
+    MAX_CACHE_BYTES = 512 * 1024 * 1024
+
+    def __init__(self, report: Callable[[str], None] = lambda x: None,
+                 cache_dir: str | Path | bool | None = None):
         self.cache: dict[tuple, np.ndarray | None] = {}
         self.report = report
+        self._disk_cache_bytes: int | None = None
+        self._disk_cache_lock = threading.Lock()
+        self._cache_dir: Path | None = None
+        if cache_dir is not False and os.environ.get('RESYNC_DISABLE_CACHE') != '1':
+            try:
+                default = (Path.home() / 'Library' / 'Caches' if sys.platform == 'darwin'
+                           else Path(os.environ.get('XDG_CACHE_HOME', str(Path.home() / '.cache'))))
+                self._cache_dir = Path(cache_dir or os.environ.get('RESYNC_CACHE_DIR')
+                                       or default / 'ReSync' / 'audio-features')
+            except (TypeError, ValueError, OSError):
+                pass
+        decoder = shutil.which('ffmpeg')
+        self._decoder_identity = self._source_key(decoder, 0, 0) if decoder else None
         self.window = np.hanning(NFFT).astype(np.float32)
         # Log-spaced bands from voices through cymbals; old version discarded
         # everything above 3.5 kHz and compressed the sound into only 5 bands.
@@ -449,16 +475,146 @@ class AudioCache:
         self.band_slices = [(max(1,int(x)), max(int(x)+1,int(y)))
                             for x,y in zip(bins[:-1], bins[1:])]
 
+    @staticmethod
+    def _source_key(path: str, sec: float, duration: float) -> tuple | None:
+        try:
+            st = os.stat(path)
+            if not os.path.isfile(path):
+                return None
+            # Match the actual seek/duration arguments sent to FFmpeg. Include
+            # ctime as well as mtime so replacing or editing a file invalidates
+            # its signatures even if a copy operation preserves its mtime.
+            return (os.path.realpath(path), st.st_dev, st.st_ino, st.st_size,
+                    st.st_mtime_ns, st.st_ctime_ns, f'{max(0, sec):.4f}',
+                    f'{duration:.4f}')
+        except (OSError, ValueError, OverflowError):
+            return None
+
+    def _cache_path(self, key: tuple) -> Path | None:
+        if self._cache_dir is None:
+            return None
+        identity = (self.CACHE_VERSION, np.__version__, AUDIO_RATE, FEATURE_FPS, NFFT, HOP,
+                    tuple(self.band_slices), self._decoder_identity, key)
+        digest = hashlib.sha256(repr(identity).encode('utf-8', 'surrogatepass')).hexdigest()
+        return self._cache_dir / (digest + '.npy')
+
+    def _load_features(self, path: Path | None, duration: float) -> np.ndarray | None:
+        if path is None:
+            return None
+        try:
+            with path.open('rb') as stream:
+                # Inspect a bounded header before NumPy can allocate according
+                # to an untrusted/corrupted shape stored on disk.
+                if np.lib.format.read_magic(stream) != (1, 0):
+                    return None
+                shape, fortran, dtype = np.lib.format.read_array_header_1_0(
+                    stream, max_header_size=1024)
+                # Cap before multiplying a very large but finite duration.
+                max_frames = int(min(duration, self.MAX_CACHE_BYTES / 4 / 15 / FEATURE_FPS)
+                                 * FEATURE_FPS) + 2
+                if (dtype != np.dtype(np.float32) or fortran or len(shape) != 2
+                        or shape[1] != len(self.band_slices) + 1
+                        or not 100 <= shape[0] <= max_frames):
+                    return None
+                payload_bytes = math.prod(shape) * dtype.itemsize
+                if (payload_bytes > self.MAX_CACHE_BYTES
+                        or os.fstat(stream.fileno()).st_size != stream.tell() + payload_bytes + 32):
+                    return None
+                stream.seek(0)
+                feat = np.load(stream, allow_pickle=False)
+                checksum = stream.read(32)
+            # A finite bit-flip can still change the best correlation peak.
+            # Verify the exact payload, rather than trusting finite values alone.
+            if (checksum == hashlib.sha256(memoryview(feat).cast('B')).digest()
+                    and np.isfinite(feat).all()):
+                return feat
+        except (OSError, ValueError, TypeError, OverflowError, EOFError):
+            pass
+        return None
+
+    def _trim_disk_cache(self):
+        entries = []
+        total = 0
+        abandoned_before = time.time() - 24 * 60 * 60
+        try:
+            for item in self._cache_dir.iterdir():
+                if item.is_symlink():
+                    continue
+                if item.name.startswith('resync-') and item.name.endswith('.tmp'):
+                    try:
+                        if item.is_file() and item.stat().st_mtime < abandoned_before:
+                            item.unlink()
+                    except OSError:
+                        pass
+                    continue
+                if not re.fullmatch(r'[0-9a-f]{64}\.npy', item.name):
+                    continue
+                try:
+                    st = item.stat()
+                    entries.append((st.st_mtime_ns, item, st.st_size))
+                    total += st.st_size
+                except OSError:
+                    continue
+            for _, item, size in sorted(entries):
+                if total <= self.MAX_CACHE_BYTES:
+                    break
+                try:
+                    item.unlink()
+                    total -= size
+                except OSError:
+                    continue
+            self._disk_cache_bytes = total
+        except OSError:
+            self._disk_cache_bytes = 0
+
+    def _save_features(self, path: Path | None, feat: np.ndarray):
+        if path is None or feat.nbytes + 160 > self.MAX_CACHE_BYTES:
+            return
+        temporary = None
+        try:
+            feat = np.ascontiguousarray(feat)
+            path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+            # Each worker/process gets a distinct temporary file. Readers only
+            # see a complete .npy after its atomic replacement.
+            with tempfile.NamedTemporaryFile(dir=path.parent, prefix='resync-', suffix='.tmp',
+                                             delete=False) as stream:
+                temporary = Path(stream.name)
+                np.save(stream, feat, allow_pickle=False)
+                stream.write(hashlib.sha256(memoryview(feat).cast('B')).digest())
+            os.replace(temporary, path)
+            temporary = None
+            with self._disk_cache_lock:
+                if self._disk_cache_bytes is None:
+                    self._trim_disk_cache()
+                else:
+                    self._disk_cache_bytes += path.stat().st_size
+                    if self._disk_cache_bytes > self.MAX_CACHE_BYTES:
+                        self._trim_disk_cache()
+        except (OSError, ValueError):
+            # Cache availability must never prevent a sync (read-only disks,
+            # disconnected volumes, full disks and concurrent eviction).
+            pass
+        finally:
+            if temporary is not None:
+                try:
+                    temporary.unlink()
+                except OSError:
+                    pass
+
     def features(self, path: str, sec: float, duration: float) -> np.ndarray | None:
-        key = (path, round(sec, 3), round(duration, 3))
+        if not math.isfinite(sec) or not math.isfinite(duration) or duration < 2:
+            return None
+        key = self._source_key(path, sec, duration)
+        if key is None:
+            return None
         if key in self.cache:
             return self.cache[key]
-        if not os.path.isfile(path):
-            self.cache[key] = None
-            return None
-        if duration < 2:
-            self.cache[key] = None
-            return None
+        cache_path = self._cache_path(key)
+        cached = self._load_features(cache_path, duration)
+        if cached is not None:
+            self.cache[key] = cached
+            self.report(f'Áudio reutilizado: {os.path.basename(path)}')
+            return cached
         self.report(f'Analisando áudio: {os.path.basename(path)}')
         args = ['ffmpeg', '-nostdin', '-hide_banner', '-loglevel', 'error', '-ss', f'{max(0,sec):.4f}',
                 '-i', path, '-t', f'{duration:.4f}', '-map', '0:a:0', '-vn', '-ac', '1',
@@ -523,6 +679,8 @@ class AudioCache:
             self.cache[key] = None
             return None
         self.cache[key] = feat
+        if self._source_key(path, sec, duration) == key:
+            self._save_features(cache_path, feat)
         return feat
 
 
@@ -535,14 +693,72 @@ class CorrelationMatch(tuple):
         return obj
 
 
+class _CorrelationCache:
+    """Bounded, per-job transforms of immutable audio feature arrays.
+
+    Keep the source reference with each entry so a Python object ID cannot be
+    reused for a different recording during the session. Entries are bounded by
+    both array bytes and count; long recordings still work when their transform
+    is too large to retain.
+    """
+    def __init__(self, max_bytes: int, max_entries: int = 256):
+        self.max_bytes = max(0, max_bytes)
+        self.max_entries = max_entries
+        self.entries = OrderedDict()
+        self.bytes = 0
+
+    def get(self, source, fft_size=None):
+        key = (id(source), fft_size)
+        if key in self.entries:
+            _, value = self.entries[key]
+            self.entries.move_to_end(key)
+            return value
+        if fft_size is None:
+            value = np.r_[0., np.cumsum((source * source).sum(axis=1),
+                                       dtype=np.float64)]
+        else:
+            value = np.fft.rfft(source, n=fft_size, axis=0)
+        if value.nbytes <= self.max_bytes:
+            while self.entries and (self.bytes + value.nbytes > self.max_bytes or
+                                    len(self.entries) >= self.max_entries):
+                _, (_, evicted) = self.entries.popitem(last=False)
+                self.bytes -= evicted.nbytes
+            self.entries[key] = (source, value)
+            self.bytes += value.nbytes
+        return value
+
+
+_correlation_cache = ContextVar('resync_correlation_cache', default=None)
+
+
+@contextmanager
+def correlation_session(max_bytes: int = 128 * 1024 * 1024):
+    """Reuse FFTs/energies within one sync job, never between unrelated jobs.
+
+    Feature arrays must remain unchanged inside the session. The public pair
+    matcher keeps its original two-argument API for callers and test doubles.
+    """
+    cache = _CorrelationCache(max_bytes)
+    token = _correlation_cache.set(cache)
+    try:
+        yield cache
+    finally:
+        _correlation_cache.reset(token)
+        cache.entries.clear()
+        cache.bytes = 0
+
+
 def correlate_features(a: np.ndarray, b: np.ndarray) -> tuple[float, float] | None:
     """Returns (b-start minus a-start in seconds, normalized correlation score)."""
     n, m = len(a), len(b)
     if min(n, m) < FEATURE_FPS * 2:
         return None
     fft_size = 1 << (n + m - 2).bit_length()
-    fft_a = np.fft.rfft(a, n=fft_size, axis=0)
-    fft_b = np.fft.rfft(b, n=fft_size, axis=0)
+    cache = _correlation_cache.get()
+    fft_a = (cache.get(a, fft_size) if cache is not None else
+             np.fft.rfft(a, n=fft_size, axis=0))
+    fft_b = (cache.get(b, fft_size) if cache is not None else
+             np.fft.rfft(b, n=fft_size, axis=0))
     cross = np.fft.irfft((fft_a * fft_b.conj()).sum(axis=1), n=fft_size)
     shifts = np.arange(-(m - 1), n, dtype=np.int64)
     corr = np.concatenate((cross[-(m - 1):], cross[:n]))
@@ -556,8 +772,10 @@ def correlate_features(a: np.ndarray, b: np.ndarray) -> tuple[float, float] | No
     valid = overlap >= minimum
     if not np.any(valid):
         return None
-    sq_a = np.r_[0., np.cumsum((a * a).sum(axis=1), dtype=np.float64)]
-    sq_b = np.r_[0., np.cumsum((b * b).sum(axis=1), dtype=np.float64)]
+    sq_a = (cache.get(a) if cache is not None else
+            np.r_[0., np.cumsum((a * a).sum(axis=1), dtype=np.float64)])
+    sq_b = (cache.get(b) if cache is not None else
+            np.r_[0., np.cumsum((b * b).sum(axis=1), dtype=np.float64)])
     energy_a = sq_a[last_a] - sq_a[first_a]
     energy_b = sq_b[last_b] - sq_b[first_b]
     norm = np.sqrt(np.maximum(energy_a * energy_b, 1.e-9))
@@ -628,7 +846,15 @@ def sync(project: Project, reference_track: str = 'auto', media_folder: str = ''
     if not shutil.which('ffmpeg'):
         raise RuntimeError('FFmpeg não encontrado. Instale com: brew install ffmpeg')
     available = [t['id'] for t in project.tracks()]
-    cache = AudioCache(lambda msg: progress(-1, msg))
+    # Worker callbacks share the same status writer (including the headless
+    # Premiere worker). Serialize callbacks so status JSON remains atomic.
+    progress_lock = threading.Lock()
+
+    def report(percent, message):
+        with progress_lock:
+            progress(percent, message)
+
+    cache = AudioCache(lambda msg: report(-1, msg))
     locate_media(project, media_folder, lambda msg: progress(-1, msg))
     project._export_cache = None
     groups = project.groups
@@ -654,6 +880,15 @@ def sync(project: Project, reference_track: str = 'auto', media_folder: str = ''
     reference_track = (reference_track if reference_track in available else
                        next((t for t in ranking if t.startswith('video-')), ranking[0]))
 
+    source_paths = {}
+    for g in groups:
+        try:
+            source_paths[g.gid] = os.path.realpath(g.path) if g.path else ''
+        except (OSError, ValueError):
+            # A malformed media URL is unavailable, not a reason to abort all
+            # other takes while precomputing their file identities.
+            source_paths[g.gid] = g.path
+
     def independent(a, b):
         # Premiere tracks are editing lanes, not unique physical recording sources.
         # In particular, an independent .wav soundtrack may share A1 with the
@@ -663,19 +898,52 @@ def sync(project: Project, reference_track: str = 'auto', media_folder: str = ''
         # Never count a file against itself merely because it occurs twice in XML.
         if not a.path or not b.path:
             return False
-        return os.path.realpath(a.path) != os.path.realpath(b.path)
+        return source_paths[a.gid] != source_paths[b.gid]
 
     # Decode each recording once. Missing/silent media will be explicitly
     # reported instead of showing an incorrect green reference clip.
     features = {}
     invalid = {}
     progress(3, 'Lendo o áudio das gravações...')
-    for i,g in enumerate(groups):
-        features[g.gid] = cache.features(g.path, g.source_in, g.duration)
-        if features[g.gid] is None:
-            invalid[g.gid] = ('Arquivo de mídia não localizado' if not os.path.isfile(g.path)
-                              else 'Áudio indisponível, silencioso ou muito curto')
-        progress(3 + int(17 * (i+1)/len(groups)), f'Extraindo assinaturas de áudio · {i+1}/{len(groups)}')
+    # A segment may occur in several unlinked XML clips. Decode it once and
+    # share the read-only features; only independent files count as evidence.
+    segments = defaultdict(list)
+    for g in groups:
+        key = (source_paths[g.gid], f'{max(0, g.source_in):.4f}', f'{g.duration:.4f}')
+        segments[key].append(g)
+    try:
+        requested_workers = int(os.environ.get('RESYNC_WORKERS', '4'))
+    except ValueError:
+        requested_workers = 4
+    workers = min(len(segments), max(1, os.cpu_count() or 1),
+                  max(1, min(4, requested_workers)))
+    completed = 0
+
+    def accept(segment_groups, value):
+        nonlocal completed
+        for g in segment_groups:
+            features[g.gid] = value
+            if value is None:
+                invalid[g.gid] = ('Arquivo de mídia não localizado' if not os.path.isfile(g.path)
+                                  else 'Áudio indisponível, silencioso ou muito curto')
+        completed += len(segment_groups)
+        report(3 + int(17 * completed / len(groups)),
+               f'Extraindo assinaturas de áudio · {completed}/{len(groups)}')
+
+    if workers == 1:
+        for segment_groups in segments.values():
+            g = segment_groups[0]
+            accept(segment_groups, cache.features(g.path, g.source_in, g.duration))
+    else:
+        # Bounded concurrency speeds independent FFmpeg/NumPy work without
+        # starting one process per take or changing graph comparison order.
+        with ThreadPoolExecutor(max_workers=workers, thread_name_prefix='resync-audio') as pool:
+            pending = {}
+            for segment_groups in segments.values():
+                g = segment_groups[0]
+                pending[pool.submit(cache.features, g.path, g.source_in, g.duration)] = segment_groups
+            for future in as_completed(pending):
+                accept(pending[future], future.result())
 
     # All distinct recording sources, not just comparisons to one track.
     # A1/V1 are containers and cannot identify a physical camera or recorder.
@@ -685,22 +953,23 @@ def sync(project: Project, reference_track: str = 'auto', media_folder: str = ''
     comparisons = 0
     eligible = [(a,b) for i,a in enumerate(groups) for b in groups[i+1:]
                 if independent(a,b) and features[a.gid] is not None and features[b.gid] is not None]
-    for i,(a,b) in enumerate(eligible):
-        answer = correlate_features(features[a.gid], features[b.gid])
-        comparisons += 1
-        if answer is not None:
-            lag, score = answer
-            unique = getattr(answer,'margin',1.)
-            if math.isfinite(lag) and math.isfinite(score) and score >= threshold \
-                    and (unique >= .065 or (score >= .90 and unique >= .03)):
-                # Correlations with at least 6 s of overlap are intrinsically
-                # safer than short chance alignments, so use duration as tie-break.
-                length = max(0., min(a.duration, b.duration))
-                weight = score + min(0.08, 0.018 * math.log1p(length / 6))
-                edges.append((weight, score, a.gid, b.gid, lag))
-        if i % 10 == 0 or i == len(eligible)-1:
-            progress(20 + int(50*(i+1)/max(1,len(eligible))),
-                     f'Comparando áudio entre todas as câmeras · {i+1}/{len(eligible)}')
+    with correlation_session():
+        for i,(a,b) in enumerate(eligible):
+            answer = correlate_features(features[a.gid], features[b.gid])
+            comparisons += 1
+            if answer is not None:
+                lag, score = answer
+                unique = getattr(answer,'margin',1.)
+                if math.isfinite(lag) and math.isfinite(score) and score >= threshold \
+                        and (unique >= .065 or (score >= .90 and unique >= .03)):
+                    # Correlations with at least 6 s of overlap are intrinsically
+                    # safer than short chance alignments, so use duration as tie-break.
+                    length = max(0., min(a.duration, b.duration))
+                    weight = score + min(0.08, 0.018 * math.log1p(length / 6))
+                    edges.append((weight, score, a.gid, b.gid, lag))
+            if i % 10 == 0 or i == len(eligible)-1:
+                progress(20 + int(50*(i+1)/max(1,len(eligible))),
+                         f'Comparando áudio entre todas as câmeras · {i+1}/{len(eligible)}')
 
     ids = [g.gid for g in groups]
     by_id = {g.gid:g for g in groups}
@@ -865,3 +1134,4 @@ def report_csv(results: dict) -> bytes:
     for g in results['groups']:
         w.writerow([g['name'], g['track'], g['old'], g['new'], g['score'], g['result'], g['matched_to']])
     return ('\ufeff' + buf.getvalue()).encode('utf-8')
+

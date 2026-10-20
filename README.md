@@ -26,6 +26,11 @@ python3 -m pip install -r source/requirements.txt
 python3 -m unittest discover -s source/tests -p 'test_*.py' -q
 ```
 
+O motor analisa até quatro segmentos independentes em paralelo, reutiliza
+transformações durante as comparações e mantém um cache local de assinaturas
+para novas sincronizações da mesma mídia. As comparações e os critérios de
+confirmação de áudio permanecem completos. Veja [medição e cache](docs/DESEMPENHO.md).
+
 ## Compilação
 
 No macOS, com Swift e Python 3.10+ disponíveis:
@@ -53,3 +58,4 @@ Veja [a preparação e publicação do canal de atualizações](docs/ATUALIZACOE
 A disponibilização pública deste código não representa, por si só, uma concessão de licença para redistribuição. Licenças de componentes como FFmpeg e Sparkle devem ser respeitadas na publicação de instaladores.
 
 Os vídeos e áudios são processados localmente. Não envie material de clientes ao repositório.
+
