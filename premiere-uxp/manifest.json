@@ -3,7 +3,7 @@
   "id": "com.retakefilmes.resync.premiere",
   "name": "ReSync for Premiere",
   "shortname": "ReSync",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "main": "index.html",
   "host": {
     "app": "premierepro",
@@ -62,3 +62,4 @@
     }
   ]
 }
+

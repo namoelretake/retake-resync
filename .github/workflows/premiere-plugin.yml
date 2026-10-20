@@ -29,6 +29,8 @@ jobs:
           node --check premiere-uxp/main.js
       - name: Testar integração simulada com Premiere
         run: node --test premiere-uxp/tests/*.test.cjs
+      - name: Testar lançamento nativo do motor embutido
+        run: python3 -m unittest discover -s premiere-uxp/native/tests -p 'test_*.py' -q
       - name: Empacotar protótipo para UXP Developer Tool
         run: |
           cd premiere-uxp
@@ -38,3 +40,4 @@ jobs:
           name: ReSync-Premiere-UXP-Preview
           path: ReSync-Premiere-UXP-Preview.zip
           if-no-files-found: error
+

@@ -34,13 +34,21 @@ function newSyncRun() {
   return run;
 }
 
+function checkCancelled(run) {
+  if (run.cancelled) throw Error('Espera interrompida. A sequência original está intacta.');
+}
+
 async function withTimeout(operation, run, milliseconds, message) {
+  checkCancelled(run);
   let timer;
   const deadline = new Promise((_, reject) => {
     timer = setTimeout(() => reject(Error(message)), milliseconds);
   });
   try {
-    return await Promise.race([Promise.resolve().then(operation), run.cancelledPromise, deadline]);
+    return await Promise.race([Promise.resolve().then(() => {
+      checkCancelled(run);
+      return operation();
+    }), run.cancelledPromise, deadline]);
   } finally {
     clearTimeout(timer);
   }
@@ -81,6 +89,35 @@ function jobId() {
 
 function joinFile(directory, filename) {
   return directory.replace(/[\\/]$/, '') + '/' + filename;
+}
+
+function entityGuid(entity, label) {
+  // Premiere Project/Sequence.guid is a Guid, whose documented toString()
+  // returns its identifier. Never compare wrapper objects or their generic
+  // String(object) conversion, which can be identical for different projects.
+  let value;
+  try {
+    const guid = entity && entity.guid;
+    value = guid && typeof guid.toString === 'function' ? guid.toString() : '';
+  } catch (_error) {
+    value = '';
+  }
+  if (typeof value !== 'string') value = '';
+  value = value.trim().replace(/^\{(.+)\}$/, '$1').toLowerCase();
+  if (!/^(?:[0-9a-f]{32}|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/.test(value)
+      || /^0+$/.test(value.replace(/-/g, ''))) {
+    throw Error('O Premiere não forneceu uma identificação válida ' + label + '. Salve o projeto, reabra-o e tente novamente.');
+  }
+  return value.replace(/-/g, '');
+}
+
+async function validateActiveProject(identity, folderPath) {
+  const current = await premiere.Project.getActiveProject();
+  if (!current || entityGuid(current, 'do projeto ativo') !== identity.guid
+      || (identity.path && current.path !== identity.path)) {
+    throw Error('O projeto ativo mudou durante a análise. O XML sincronizado está na pasta: ' + folderPath);
+  }
+  return current;
 }
 
 function setBusy(value) {
@@ -207,8 +244,9 @@ async function waitForSync(folder, statusName, id, run, timeout=JOB_TIMEOUT_MS) 
   let lastMessage = '';
   let hasStarted = false;
   while (Date.now() < deadline) {
-    if (run.cancelled) throw Error('Espera interrompida.');
+    checkCancelled(run);
     const state = await readJobStatus(folder, statusName, id);
+    checkCancelled(run);
     if (state) {
       hasStarted = true;
       if (state.message && state.message !== lastMessage) {
@@ -219,7 +257,7 @@ async function waitForSync(folder, statusName, id, run, timeout=JOB_TIMEOUT_MS) 
       if (state.state === 'error') throw Error(state.message || 'Falha no motor ReSync.');
       if (state.state === 'done') return state;
     } else if (!hasStarted && Date.now() - began > BRIDGE_START_TIMEOUT_MS) {
-      throw Error('O motor não iniciou. Instale o ReSync.app Beta compatível em Aplicativos (a versão pública 0.6.6 não possui essa integração). Não escolha um arquivo JSON na janela do macOS; ela indica que o endereço resync:// não foi associado ao aplicativo.');
+      throw Error('O motor não iniciou. Instale o ReSync.app compatível em Aplicativos (versão 0.6.8 ou posterior). Não escolha um arquivo JSON na janela do macOS; ela indica que o endereço resync:// não foi associado ao aplicativo.');
     }
     await Promise.race([
       new Promise(resolve => setTimeout(resolve, POLL_MS)),
@@ -229,27 +267,30 @@ async function waitForSync(folder, statusName, id, run, timeout=JOB_TIMEOUT_MS) 
   throw Error('A sincronização excedeu o limite de tempo. Confira a pasta de trabalho e os arquivos de mídia.');
 }
 
-async function importNewSequence(project, xmlPath, expectedName) {
+async function importNewSequence(project, xmlPath, expectedName, run, identity, folderPath) {
   const before = await project.getSequences();
-  const beforeNames = new Set(before.map(seq => String(seq.name)));
+  checkCancelled(run);
+  const beforeIds = new Set(before.map(seq => entityGuid(seq, 'da sequência')));
+  project = await validateActiveProject(identity, folderPath);
+  checkCancelled(run);
+  // importFiles is asynchronous and is not a CompoundAction transaction.
+  // Once it starts, do not advertise cancellation or a rollback we cannot do.
+  currentSync = null;
+  el('stop-wait').hidden = true;
   // Premiere's UXP Project.importFiles accepts null for the optional bin.
   // Unlike undefined, null is supported in Premiere 26.5.x.
   const imported = await project.importFiles([xmlPath], true, null, false);
   if (!imported) throw Error('O Premiere recusou importar o XML sincronizado. O XML permanece disponível na pasta escolhida.');
   const after = await project.getSequences();
-  const created = after.filter(seq => !beforeNames.has(String(seq.name)));
-  const matched = created.find(seq => String(seq.name) === String(expectedName))
-    || (created.length === 1 ? created[0] : null);
+  const created = after.filter(seq => !beforeIds.has(entityGuid(seq, 'da sequência')));
+  const candidates = created.filter(seq => seq.name === expectedName);
+  const matched = candidates.length === 1 ? candidates[0] : null;
   if (!matched) {
     throw Error('XML importado, mas não foi possível identificar uma nova sequência. Confira o painel Projeto. A original foi preservada.');
   }
   const opened = await project.openSequence(matched);
-  if (!opened) {
-    status('Nova sequência criada: ' + matched.name + '. Abra-a pelo painel Projeto.', 'success');
-    return matched;
-  }
-  await project.setActiveSequence(matched);
-  return matched;
+  const activated = opened ? await project.setActiveSequence(matched) : false;
+  return {sequence:matched, opened:Boolean(opened && activated)};
 }
 
 async function syncSequence() {
@@ -260,9 +301,14 @@ async function syncSequence() {
   progress(0);
   try {
     const {project, sequence} = await getSequenceContext();
+    checkCancelled(run);
     if (!project || !sequence) throw Error('Abra uma sequência no Premiere primeiro.');
+    // Capture primitive values now: saveAs() may mutate a Project wrapper.
+    const identity = {guid:entityGuid(project, 'do projeto'), path:project.path};
+    entityGuid(sequence, 'da sequência original');
 
     const folder = await workspaceFolder();
+    checkCancelled(run);
     if (!folder) {
       status('Operação cancelada. A sequência original não foi modificada.');
       return;
@@ -279,22 +325,26 @@ async function syncSequence() {
     status('Exportando sequência para análise de áudio…');
     progress(2);
     const ok = await premiere.ProjectConverter.exportAsFinalCutProXML(sequence, sourcePath, true);
+    checkCancelled(run);
     if (!ok) throw Error('O Premiere não conseguiu exportar a sequência para análise.');
 
     const jobFile = await folder.createFile(jobName);
+    checkCancelled(run);
     await jobFile.write(JSON.stringify({
       protocol:1, job_id:id, reference:'auto', sequence_name:sequence.name
     }));
+    checkCancelled(run);
     if (!jobFile.nativePath) throw Error('Não foi possível criar o arquivo de trabalho.');
 
     status('Iniciando motor do ReSync em segundo plano…');
     const url = 'resync://sync?job=' + encodeURIComponent(jobFile.nativePath);
     const launched = await withTimeout(
       () => shell.openExternal(url,
-        'Autorize abrir o ReSync.app Beta. NÃO selecione um arquivo JSON nem outro programa.'),
+        'Autorize iniciar o motor local do ReSync. NÃO selecione um arquivo JSON nem outro programa.'),
       run, BRIDGE_LAUNCH_TIMEOUT_MS,
-      'O macOS não confirmou a abertura do ReSync. Verifique se o ReSync.app Beta está instalado em Aplicativos. Feche qualquer janela pedindo para escolher um arquivo JSON.'
+      'O macOS não confirmou a abertura do ReSync. Verifique se o ReSync.app está instalado em Aplicativos. Feche qualquer janela pedindo para escolher um arquivo JSON.'
     );
+    checkCancelled(run);
     if (launched) throw Error('O macOS não conseguiu iniciar o ReSync: ' + launched);
 
     status('Aguardando a confirmação do motor ReSync…');
@@ -303,20 +353,13 @@ async function syncSequence() {
       throw Error('Resultado da sincronização não corresponde à solicitação.');
     }
 
-    const current = await premiere.Project.getActiveProject();
-    if (!current || String(current.path) !== String(project.path)) {
-      throw Error('O projeto ativo mudou durante a análise. O XML sincronizado está na pasta: ' + folder.nativePath);
-    }
-
-    if (run.cancelled) throw Error('Espera interrompida; o XML pode estar salvo na pasta de trabalho.');
-    // Import is a Premiere transaction: once it starts, do not advertise a
-    // cancellation that cannot roll back partial project changes.
-    currentSync = null;
-    el('stop-wait').hidden = true;
+    const current = await validateActiveProject(identity, folder.nativePath);
+    checkCancelled(run);
     progress(100);
     status('Importando a nova sequência no Premiere…');
-    const newSequence = await importNewSequence(project,
-      joinFile(folder.nativePath, outputName), result.sequence_name);
+    const imported = await importNewSequence(current,
+      joinFile(folder.nativePath, outputName), result.sequence_name, run, identity, folder.nativePath);
+    const newSequence = imported.sequence;
     const tracks = result.summary || {};
     const trackInfo = Number.isInteger(tracks.video_tracks) && Number.isInteger(tracks.audio_tracks)
       ? ' · V' + tracks.video_tracks + ' / A' + tracks.audio_tracks
@@ -324,8 +367,18 @@ async function syncSequence() {
     const savedInfo = Number.isInteger(tracks.tracks_compacted) && tracks.tracks_compacted > 0
       ? ' · ' + tracks.tracks_compacted + ' pistas desnecessárias eliminadas'
       : '';
-    status('Nova sequência pronta: ' + newSequence.name + trackInfo + savedInfo +
-      '. A sequência original foi preservada.', 'success');
+    const hasCounts = Number.isInteger(tracks.total) && tracks.total >= 0
+      && Number.isInteger(tracks.unmatched) && tracks.unmatched >= 0 && tracks.unmatched <= tracks.total;
+    // The engine's synced counter excludes reference takes. total-unmatched
+    // includes every take with confirmed audio, including those references.
+    const syncInfo = hasCounts
+      ? ' · ' + (tracks.total - tracks.unmatched) + '/' + tracks.total + ' takes com áudio confirmado'
+        + (tracks.unmatched > 0 ? ' · ' + tracks.unmatched + ' para revisão (vermelho)' : '')
+      : ' · O motor não informou a contagem de áudio confirmado; revise os takes';
+    const openInfo = imported.opened ? '' : ' Abra-a pelo painel Projeto.';
+    status('Nova sequência criada: ' + newSequence.name + syncInfo + trackInfo + savedInfo +
+      '. A sequência original foi preservada.' + openInfo,
+      hasCounts && tracks.total > 0 && tracks.unmatched === 0 ? 'success' : '');
   } catch (error) {
     console.error('ReSync: sincronização pelo painel', error);
     status('Não foi possível concluir: ' + (error.message || error), 'error');
@@ -345,3 +398,4 @@ entrypoints.setup({
   panels: {resyncPanel: {show() { refreshSequence().catch(e => console.error('ReSync:', e)); }}}
 });
 refreshSequence().catch(e => console.error('ReSync:', e));
+
