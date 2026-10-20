@@ -23,7 +23,7 @@ concurrency:
 jobs:
   release:
     if: github.ref == 'refs/heads/main'
-    runs-on: macos-15
+    runs-on: macos-26
     timeout-minutes: 50
     steps:
       - uses: actions/checkout@v4
@@ -37,6 +37,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           test -n "$PUBLIC_KEY" || { echo "::error::Cadastre SPARKLE_PUBLIC_ED_KEY nos Actions secrets."; exit 1; }
+          test "$(uname -m)" = "arm64"
           test -n "$PRIVATE_KEY" || { echo "::error::Cadastre SPARKLE_PRIVATE_ED_KEY nos Actions secrets."; exit 1; }
           python3 -c 'import base64,os; assert len(base64.b64decode(os.environ["PUBLIC_KEY"],validate=True)) == 32, "A chave pública EdDSA deve ter 32 bytes."'
           visibility=$(gh api repos/"$GITHUB_REPOSITORY" --jq '.visibility')
