@@ -17,6 +17,13 @@ O aplicativo utiliza uma janela nativa AppKit + WebKit, com motor Python e FFmpe
 - `build/` — compilação, empacotamento e geração de feed de atualização.
 - `assets/` — ícone e demais recursos.
 
+## ReSync para Premiere
+
+O [painel UXP](premiere-uxp/README.md) sincroniza e importa uma nova sequência
+automaticamente, usando o motor atual. O beta ainda depende do ReSync.app para
+iniciar esse motor. O desenvolvimento do runtime embutido e do futuro plugin
+híbrido está documentado no [plano do plugin independente](docs/PREMIERE_INDEPENDENTE.md).
+
 ## Testes
 
 No ambiente com Python 3 e FFmpeg no PATH:
