@@ -14,8 +14,6 @@ jobs:
   engine-tests:
     runs-on: ubuntu-latest
     timeout-minutes: 15
-    env:
-      RESYNC_CACHE_DIR: ${{ runner.temp }}/resync-test-cache
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -39,6 +37,8 @@ jobs:
       - name: Confirmar FFmpeg disponível
         run: ffmpeg -version
       - name: Executar testes
+        env:
+          RESYNC_CACHE_DIR: ${{ runner.temp }}/resync-test-cache
         run: python -m unittest discover -s source/tests -p 'test_*.py' -q
       - name: Medir desempenho com mídia sintética
         run: python build/benchmark_sync.py --scenario quick --output "$RUNNER_TEMP/resync-benchmark.json"

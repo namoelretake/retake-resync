@@ -77,3 +77,19 @@ externos. Ganho da correlação não equivale ao ganho do fluxo completo.
 O workflow de testes publica um relatório sintético, sem impor tempo máximo
 dependente do runner. Mudanças em `source/**` também acionam a compilação
 macOS e seu teste do motor empacotado.
+
+## Resultados de referência
+
+Comparação com `b442f7a` neste Mac arm64: Python 3.12.14, NumPy 2.3.5,
+FFmpeg 9.0.2, quatro tarefas. Tempos em segundos do motor e exportação:
+
+| Cenário sintético | Base: primeira / repetida | Otimizado: primeira / repetida |
+| --- | ---: | ---: |
+| 8 takes de 180s, AAC 48kHz estéreo | 2,114 / 2,529 | 0,779 / 0,062 |
+| 8 takes de 180s, PCM 16kHz mono | 0,750 / 0,792 | 0,364 / 0,054 |
+| 60 takes de 20s, PCM 16kHz mono | 2,513 / 2,500 | 0,887 / 0,181 |
+
+Resultados e XML ficaram idênticos à base em todas as passagens. O cenário
+de 60 takes manteve 1.770 comparações e 20 blocos independentes. Com duas
+tarefas, a primeira análise do cenário AAC levou 1,152s; mantemos quatro
+como limite padrão. Estes números não preveem o tempo da mídia real do usuário.
