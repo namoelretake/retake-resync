@@ -82,7 +82,8 @@ def run_synthetic_graph(project, links):
     with (patch("engine.shutil.which", return_value="/usr/bin/ffmpeg"),
           patch("engine.locate_media", return_value=None),
           patch("engine.AudioCache.features", features),
-          patch("engine.correlate_features", match)):
+          patch("engine.correlate_features", match),
+          patch("engine.confirm_audio_identity", return_value=True)):
         return sync(project, threshold=.60)
 
 
@@ -153,3 +154,4 @@ class TestVerifiedSyncBlocks(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+

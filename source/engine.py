@@ -35,8 +35,10 @@ FEATURE_FPS = 50
 AUDIO_RATE = 16000
 HOP = AUDIO_RATE // FEATURE_FPS
 NFFT = 1024
+MUSIC_IDENTITY_BINS = 12
 # Valores internos: o editor não precisa configurar graus de confiança.
 AUTO_STRONG_SCORE = 0.46
+AUTO_IDENTITY_MIN_SCORE = 0.65
 AUTO_CONSENSUS_SCORE = 0.38
 MIN_VERIFIED_OVERLAP = 1.0
 # Gap between distinct audio-verified recording blocks on the Premiere timeline.
@@ -447,12 +449,13 @@ class Project:
 class AudioCache:
     # Bump this whenever feature extraction changes. Files contain signatures,
     # never decoded audio, and can always be recreated from the source media.
-    CACHE_VERSION = 2
+    CACHE_VERSION = 3
     MAX_CACHE_BYTES = 512 * 1024 * 1024
 
     def __init__(self, report: Callable[[str], None] = lambda x: None,
                  cache_dir: str | Path | bool | None = None):
         self.cache: dict[tuple, np.ndarray | None] = {}
+        self._verification: dict[int, np.ndarray] = {}
         self.report = report
         self._disk_cache_bytes: int | None = None
         self._disk_cache_lock = threading.Lock()
@@ -474,6 +477,19 @@ class AudioCache:
         bins = np.round(edges / AUDIO_RATE * NFFT).astype(int)
         self.band_slices = [(max(1,int(x)), max(int(x)+1,int(y)))
                             for x,y in zip(bins[:-1], bins[1:])]
+        # Keep raw musical identity separate from the gain-normalized onset
+        # features. Different songs can share attacks/rhythm without sharing
+        # their pitch content. Reuse the existing FFT rather than decode again.
+        frequencies = np.fft.rfftfreq(NFFT, 1 / AUDIO_RATE)
+        self._identity_mapping = np.zeros((len(frequencies), MUSIC_IDENTITY_BINS), dtype=np.float32)
+        valid = (frequencies >= 180) & (frequencies <= 4000)
+        indices = np.flatnonzero(valid)
+        notes = np.round(MUSIC_IDENTITY_BINS * np.log2(frequencies[valid] / 440)).astype(int) % MUSIC_IDENTITY_BINS
+        self._identity_mapping[indices, notes] = 1
+
+    def verification_features(self, feat: np.ndarray | None) -> np.ndarray | None:
+        """Return time-aligned tonal identity without changing public Nx15 features."""
+        return self._verification.get(id(feat)) if feat is not None else None
 
     @staticmethod
     def _source_key(path: str, sec: float, duration: float) -> tuple | None:
@@ -494,7 +510,7 @@ class AudioCache:
         if self._cache_dir is None:
             return None
         identity = (self.CACHE_VERSION, np.__version__, AUDIO_RATE, FEATURE_FPS, NFFT, HOP,
-                    tuple(self.band_slices), self._decoder_identity, key)
+                    MUSIC_IDENTITY_BINS, tuple(self.band_slices), self._decoder_identity, key)
         digest = hashlib.sha256(repr(identity).encode('utf-8', 'surrogatepass')).hexdigest()
         return self._cache_dir / (digest + '.npy')
 
@@ -509,11 +525,13 @@ class AudioCache:
                     return None
                 shape, fortran, dtype = np.lib.format.read_array_header_1_0(
                     stream, max_header_size=1024)
+                feature_columns = len(self.band_slices) + 1
+                total_columns = feature_columns + MUSIC_IDENTITY_BINS
                 # Cap before multiplying a very large but finite duration.
-                max_frames = int(min(duration, self.MAX_CACHE_BYTES / 4 / 15 / FEATURE_FPS)
+                max_frames = int(min(duration, self.MAX_CACHE_BYTES / 4 / total_columns / FEATURE_FPS)
                                  * FEATURE_FPS) + 2
                 if (dtype != np.dtype(np.float32) or fortran or len(shape) != 2
-                        or shape[1] != len(self.band_slices) + 1
+                        or shape[1] != total_columns
                         or not 100 <= shape[0] <= max_frames):
                     return None
                 payload_bytes = math.prod(shape) * dtype.itemsize
@@ -521,12 +539,17 @@ class AudioCache:
                         or os.fstat(stream.fileno()).st_size != stream.tell() + payload_bytes + 32):
                     return None
                 stream.seek(0)
-                feat = np.load(stream, allow_pickle=False)
+                combined = np.load(stream, allow_pickle=False)
                 checksum = stream.read(32)
             # A finite bit-flip can still change the best correlation peak.
             # Verify the exact payload, rather than trusting finite values alone.
-            if (checksum == hashlib.sha256(memoryview(feat).cast('B')).digest()
-                    and np.isfinite(feat).all()):
+            if (checksum == hashlib.sha256(memoryview(combined).cast('B')).digest()
+                    and np.isfinite(combined).all()):
+                # Return contiguous arrays: a strided Nx15 view would preserve
+                # values but add copying to subsequent correlation FFTs.
+                feat = combined[:, :feature_columns].copy()
+                fingerprint = combined[:, feature_columns:].copy()
+                self._verification[id(feat)] = fingerprint
                 return feat
         except (OSError, ValueError, TypeError, OverflowError, EOFError):
             pass
@@ -567,20 +590,20 @@ class AudioCache:
         except OSError:
             self._disk_cache_bytes = 0
 
-    def _save_features(self, path: Path | None, feat: np.ndarray):
-        if path is None or feat.nbytes + 160 > self.MAX_CACHE_BYTES:
+    def _save_features(self, path: Path | None, feat: np.ndarray, fingerprint: np.ndarray):
+        if path is None or feat.nbytes + fingerprint.nbytes + 160 > self.MAX_CACHE_BYTES:
             return
         temporary = None
         try:
-            feat = np.ascontiguousarray(feat)
+            combined = np.column_stack((feat, fingerprint))
             path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
             # Each worker/process gets a distinct temporary file. Readers only
             # see a complete .npy after its atomic replacement.
             with tempfile.NamedTemporaryFile(dir=path.parent, prefix='resync-', suffix='.tmp',
                                              delete=False) as stream:
                 temporary = Path(stream.name)
-                np.save(stream, feat, allow_pickle=False)
-                stream.write(hashlib.sha256(memoryview(feat).cast('B')).digest())
+                np.save(stream, combined, allow_pickle=False)
+                stream.write(hashlib.sha256(memoryview(combined).cast('B')).digest())
             os.replace(temporary, path)
             temporary = None
             with self._disk_cache_lock:
@@ -623,6 +646,7 @@ class AudioCache:
         # Process audio in 4MB chunks. A 3-hour reference remains memory efficient.
         remain = np.empty(0, dtype=np.float32)
         segments = []
+        identity_segments = []
         try:
             while True:
                 raw = p.stdout.read(4 * 1024 * 1024)
@@ -641,6 +665,10 @@ class AudioCache:
                 spec **= 2
                 bands = np.stack([np.log1p(spec[:, lo:hi].mean(axis=1)) for lo, hi in self.band_slices], axis=1)
                 segments.append(bands)
+                chroma = np.sqrt(spec @ self._identity_mapping)
+                chroma = np.maximum(chroma - np.median(chroma, axis=1, keepdims=True), 0)
+                chroma /= np.linalg.norm(chroma, axis=1, keepdims=True) + 1.e-8
+                identity_segments.append(chroma)
                 remain = x[count * HOP:].copy()
         finally:
             if p.stdout:
@@ -679,8 +707,10 @@ class AudioCache:
             self.cache[key] = None
             return None
         self.cache[key] = feat
+        fingerprint = np.concatenate(identity_segments, axis=0)
+        self._verification[id(feat)] = fingerprint
         if self._source_key(path, sec, duration) == key:
-            self._save_features(cache_path, feat)
+            self._save_features(cache_path, feat, fingerprint)
         return feat
 
 
@@ -789,6 +819,33 @@ def correlate_features(a: np.ndarray, b: np.ndarray) -> tuple[float, float] | No
     runnerup = float(np.max(scores[alternate])) if np.any(alternate) else -1.
     margin = float(scores[best]) - runnerup
     return CorrelationMatch(float(shifts[best]) / FEATURE_FPS, float(scores[best]), margin, runnerup)
+
+
+def confirm_audio_identity(cache: AudioCache, a: np.ndarray, b: np.ndarray,
+                           lag: float) -> bool:
+    """Confirm that an envelope match also shares spectral/pitch identity.
+
+    Per-band standardization is useful for finding offsets through different
+    microphones, but can make different notes with the same rhythm look alike.
+    The secondary descriptor retains the spectral identity of each instant and
+    is checked only at the candidate offset. Silence supplies no evidence.
+    """
+    if not math.isfinite(lag):
+        return False
+    left, right = cache.verification_features(a), cache.verification_features(b)
+    if left is None or right is None:
+        return False
+    shift = round(lag * FEATURE_FPS)
+    first_a, first_b = max(0, shift), max(0, -shift)
+    count = min(len(left) - first_a, len(right) - first_b)
+    if count <= 0:
+        return False
+    x, y = left[first_a:first_a + count], right[first_b:first_b + count]
+    active = ((x * x).sum(axis=1) > .25) & ((y * y).sum(axis=1) > .25)
+    if np.count_nonzero(active) < 3:
+        return False
+    score = float(np.mean((x[active] * y[active]).sum(axis=1)))
+    return math.isfinite(score) and score >= AUTO_IDENTITY_MIN_SCORE
 
 
 def locate_media(project: Project, media_folder: str, report=lambda x: None):
@@ -951,6 +1008,7 @@ def sync(project: Project, reference_track: str = 'auto', media_folder: str = ''
     # the cameras' linked scratch audio. Transitive bridges allow A ↔ B ↔ C.
     edges = []
     comparisons = 0
+    identity_rejected = set()
     eligible = [(a,b) for i,a in enumerate(groups) for b in groups[i+1:]
                 if independent(a,b) and features[a.gid] is not None and features[b.gid] is not None]
     with correlation_session():
@@ -966,7 +1024,10 @@ def sync(project: Project, reference_track: str = 'auto', media_folder: str = ''
                     # safer than short chance alignments, so use duration as tie-break.
                     length = max(0., min(a.duration, b.duration))
                     weight = score + min(0.08, 0.018 * math.log1p(length / 6))
-                    edges.append((weight, score, a.gid, b.gid, lag))
+                    if confirm_audio_identity(cache, features[a.gid], features[b.gid], lag):
+                        edges.append((weight, score, a.gid, b.gid, lag))
+                    else:
+                        identity_rejected.update((a.gid, b.gid))
             if i % 10 == 0 or i == len(eligible)-1:
                 progress(20 + int(50*(i+1)/max(1,len(eligible))),
                          f'Comparando áudio entre todas as câmeras · {i+1}/{len(eligible)}')
@@ -1089,6 +1150,8 @@ def sync(project: Project, reference_track: str = 'auto', media_folder: str = ''
             g.reason='Posição incompatível com a ordem dos clipes'
         elif g.gid in contradictory:
             g.reason='Áudio ambíguo entre diferentes takes'
+        elif g.gid in identity_rejected:
+            g.reason='Ritmo parecido, mas áudio diferente: sincronismo não confirmado'
         elif not any(independent(g,other) for other in groups if other is not g):
             g.reason='Take isolado: nenhuma outra fonte independente disponível'
         else:

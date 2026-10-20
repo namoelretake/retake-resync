@@ -24,7 +24,7 @@ permissions:
 
 jobs:
   macos-app:
-    runs-on: macos-15
+    runs-on: macos-26
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
@@ -35,6 +35,7 @@ jobs:
         run: |
           python3 --version
           uname -m
+          test "$(uname -m)" = "arm64"
           xcrun --find swiftc
       - name: Instalar dependências dos testes
         run: python3 -m pip install -r source/requirements.txt
@@ -79,6 +80,6 @@ jobs:
           if-no-files-found: error
 
 # Build manual para teste: pode consumir minutos cobrados no GitHub.
-# macos-15 usa runner Intel; a versão nativa arm64 deve ser compilada em um Mac Apple Silicon.
+# macos-26 usa runner Apple Silicon; o alvo mínimo é lido de build/Info.plist.
 # Não publica Release nem instala atualizações automaticamente.
 

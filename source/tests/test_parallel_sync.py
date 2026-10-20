@@ -43,7 +43,8 @@ class TestParallelSync(unittest.TestCase):
               patch('engine.os.cpu_count', return_value=4),
               patch('engine.shutil.which', return_value='/ffmpeg'),
               patch('engine.AudioCache.features', features),
-              patch('engine.correlate_features', match)):
+              patch('engine.correlate_features', match),
+              patch('engine.confirm_audio_identity', return_value=True)):
             result = sync(p)
         return result, p.to_xml()
 
