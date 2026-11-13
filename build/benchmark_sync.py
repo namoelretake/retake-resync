@@ -41,12 +41,17 @@ SCENARIOS = {
     "quick": {"cameras": 3, "blocks": 3, "duration": 20},
     "multicam": {"cameras": 3, "blocks": 8, "duration": 45},
     "many": {"cameras": 3, "blocks": 20, "duration": 20},
+    "many-120": {"cameras": 3, "blocks": 40, "duration": 20},
+    "many-240": {"cameras": 3, "blocks": 80, "duration": 20},
     # One continuous recorder plus 24 short takes spread over 15 minutes.
     "long": {"cameras": 3, "blocks": 8, "duration": 45, "reference": 900},
 }
 
 
 def load_engine(path: Path):
+    # The experimental engine imports sibling modules even when loaded from
+    # an explicit file path rather than through the application launcher.
+    sys.path.insert(0, str(path.parent))
     spec = importlib.util.spec_from_file_location("resync_benchmark_engine", path)
     module = importlib.util.module_from_spec(spec)
     sys.modules[spec.name] = module
@@ -207,6 +212,7 @@ def run_worker(args):
             "export_seconds": round(finished - synced, 6),
             "comparisons": result["comparisons"],
             "verified_components": result["verified_components"],
+            **({"matching": result["matching"]} if "matching" in result else {}),
             "result_sha256": hashlib.sha256(json.dumps(result, sort_keys=True).encode()).hexdigest(),
             "xml_sha256": hashlib.sha256(output).hexdigest()})
     print(json.dumps(observations))
@@ -220,6 +226,10 @@ def main():
     parser.add_argument("--media-format", choices=("wav", "aac"), default="wav")
     parser.add_argument("--repeats", type=int, default=2)
     parser.add_argument("--workers", type=int)
+    parser.add_argument("--candidate-mode", choices=("stable", "next"), default="stable",
+                        help="Enable the experimental matcher only for the candidate")
+    parser.add_argument("--allow-validated-differences", action="store_true",
+                        help="Validate known offsets and grouping, but report rather than require identical XML")
     parser.add_argument("--output", type=Path)
     parser.add_argument("--fixture", type=Path, help=argparse.SUPPRESS)
     parser.add_argument("--worker", action="store_true", help=argparse.SUPPRESS)
@@ -250,6 +260,7 @@ def main():
             env = dict(os.environ)
             env["RESYNC_CACHE_DIR"] = str(root / ("cache-" + label))
             env.pop("RESYNC_DISABLE_CACHE", None)
+            env["RESYNC_ENGINE"] = args.candidate_mode if label == "candidate" else "stable"
             if args.workers is not None:
                 env["RESYNC_WORKERS"] = str(args.workers)
             command = [sys.executable, str(Path(__file__).resolve()), "--worker", "--engine", str(path.resolve()),
@@ -263,7 +274,9 @@ def main():
             candidate = report["engines"]["candidate"]["runs"]
             report["equivalent_results"] = all(r["result_sha256"] == baseline[0]["result_sha256"]
                 and r["xml_sha256"] == baseline[0]["xml_sha256"] for r in baseline + candidate)
-            if not report["equivalent_results"]:
+            report["equivalent_xml"] = all(r["xml_sha256"] == baseline[0]["xml_sha256"]
+                                           for r in baseline + candidate)
+            if not report["equivalent_results"] and not args.allow_validated_differences:
                 raise AssertionError("Candidate output or result differs from the baseline")
             report["speedup"] = {"first_run": round(baseline[0]["seconds"] / candidate[0]["seconds"], 3),
                                  "repeated_run": round(baseline[-1]["seconds"] / candidate[-1]["seconds"], 3)}

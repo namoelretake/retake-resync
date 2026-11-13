@@ -5,6 +5,7 @@ import os
 import re
 import sys
 import threading
+import time
 import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -38,7 +39,13 @@ def process(reference, media_folder):
     try:
         with LOCK:
             project = STATE['project']
+        started = time.perf_counter()
         result = sync(project, reference, media_folder, progress=progress)
+        if result.get('engine_mode') == 'next':
+            progress(100, 'Preparando o XML da sequência...')
+            project.to_xml()
+            result['processing_seconds'] = round(time.perf_counter() - started, 3)
+            progress(100, 'Sequência pronta para exportar')
         with LOCK:
             STATE['result'] = result
     except Exception as e:
@@ -145,3 +152,4 @@ if __name__ == '__main__':
         from sync_job import run_job
         sys.exit(run_job(sys.argv[2]))
     main()
+
