@@ -453,10 +453,11 @@ class AudioCache:
     MAX_CACHE_BYTES = 512 * 1024 * 1024
 
     def __init__(self, report: Callable[[str], None] = lambda x: None,
-                 cache_dir: str | Path | bool | None = None):
+                 cache_dir: str | Path | bool | None = None, *, next_engine=False):
         self.cache: dict[tuple, np.ndarray | None] = {}
         self._verification: dict[int, np.ndarray] = {}
         self.report = report
+        self._next_engine = next_engine
         self._disk_cache_bytes: int | None = None
         self._disk_cache_lock = threading.Lock()
         self._cache_dir: Path | None = None
@@ -486,6 +487,9 @@ class AudioCache:
         indices = np.flatnonzero(valid)
         notes = np.round(MUSIC_IDENTITY_BINS * np.log2(frequencies[valid] / 440)).astype(int) % MUSIC_IDENTITY_BINS
         self._identity_mapping[indices, notes] = 1
+        if next_engine:
+            self._identity_slice = slice(indices[0], indices[-1] + 1)
+            self._identity_compact = self._identity_mapping[self._identity_slice].copy()
 
     def verification_features(self, feat: np.ndarray | None) -> np.ndarray | None:
         """Return time-aligned tonal identity without changing public Nx15 features."""
@@ -511,6 +515,8 @@ class AudioCache:
             return None
         identity = (self.CACHE_VERSION, np.__version__, AUDIO_RATE, FEATURE_FPS, NFFT, HOP,
                     MUSIC_IDENTITY_BINS, tuple(self.band_slices), self._decoder_identity, key)
+        if self._next_engine:
+            identity += ('next-power-v1',)
         digest = hashlib.sha256(repr(identity).encode('utf-8', 'surrogatepass')).hexdigest()
         return self._cache_dir / (digest + '.npy')
 
@@ -661,11 +667,19 @@ class AudioCache:
                     remain = x
                     continue
                 view = np.lib.stride_tricks.sliding_window_view(x, NFFT)[::HOP][:count]
-                spec = np.abs(np.fft.rfft(view * self.window, axis=1)).astype(np.float32)
-                spec **= 2
+                spectrum = np.fft.rfft(view * self.window, axis=1)
+                if self._next_engine:
+                    # Power directly in the real/imaginary components avoids
+                    # a square root immediately followed by a square.
+                    spec = (spectrum.real ** 2 + spectrum.imag ** 2).astype(np.float32, copy=False)
+                else:
+                    spec = np.abs(spectrum).astype(np.float32)
+                    spec **= 2
+                del spectrum
                 bands = np.stack([np.log1p(spec[:, lo:hi].mean(axis=1)) for lo, hi in self.band_slices], axis=1)
                 segments.append(bands)
-                chroma = np.sqrt(spec @ self._identity_mapping)
+                chroma = np.sqrt(spec[:, self._identity_slice] @ self._identity_compact
+                                 if self._next_engine else spec @ self._identity_mapping)
                 chroma = np.maximum(chroma - np.median(chroma, axis=1, keepdims=True), 0)
                 chroma /= np.linalg.norm(chroma, axis=1, keepdims=True) + 1.e-8
                 identity_segments.append(chroma)
@@ -759,10 +773,11 @@ class _CorrelationCache:
 
 
 _correlation_cache = ContextVar('resync_correlation_cache', default=None)
+_next_correlation = ContextVar('resync_next_correlation', default=False)
 
 
 @contextmanager
-def correlation_session(max_bytes: int = 128 * 1024 * 1024):
+def correlation_session(max_bytes: int = 128 * 1024 * 1024, *, next_engine=False):
     """Reuse FFTs/energies within one sync job, never between unrelated jobs.
 
     Feature arrays must remain unchanged inside the session. The public pair
@@ -770,10 +785,12 @@ def correlation_session(max_bytes: int = 128 * 1024 * 1024):
     """
     cache = _CorrelationCache(max_bytes)
     token = _correlation_cache.set(cache)
+    next_token = _next_correlation.set(next_engine)
     try:
         yield cache
     finally:
         _correlation_cache.reset(token)
+        _next_correlation.reset(next_token)
         cache.entries.clear()
         cache.bytes = 0
 
@@ -789,7 +806,13 @@ def correlate_features(a: np.ndarray, b: np.ndarray) -> tuple[float, float] | No
              np.fft.rfft(a, n=fft_size, axis=0))
     fft_b = (cache.get(b, fft_size) if cache is not None else
              np.fft.rfft(b, n=fft_size, axis=0))
-    cross = np.fft.irfft((fft_a * fft_b.conj()).sum(axis=1), n=fft_size)
+    # A conjugating dot product avoids allocating two frequency-by-band
+    # matrices for every pair. Keep the former reduction for stable mode and
+    # Python environments whose NumPy does not yet have vecdot.
+    spectrum = (np.vecdot(fft_b, fft_a, axis=1)
+                if _next_correlation.get() and hasattr(np, 'vecdot')
+                else (fft_a * fft_b.conj()).sum(axis=1))
+    cross = np.fft.irfft(spectrum, n=fft_size)
     shifts = np.arange(-(m - 1), n, dtype=np.int64)
     corr = np.concatenate((cross[-(m - 1):], cross[:n]))
     first_a = np.maximum(shifts, 0)
@@ -892,7 +915,8 @@ def locate_media(project: Project, media_folder: str, report=lambda x: None):
 
 def sync(project: Project, reference_track: str = 'auto', media_folder: str = '',
          threshold: float = AUTO_STRONG_SCORE,
-         progress: Callable[[int, str], None] = lambda pct, msg: None) -> dict:
+         progress: Callable[[int, str], None] = lambda pct, msg: None, *,
+         engine_mode: str | None = None) -> dict:
     """Sync independent takes using a pairwise audio-evidence graph.
 
     Each graph edge supplies a measured relative start time. Connected components
@@ -900,6 +924,8 @@ def sync(project: Project, reference_track: str = 'auto', media_folder: str = ''
     There is no compulsory main camera and no end-user confidence setting.
     Takes without a verified independent overlap are kept in the red tail.
     """
+    next_engine = (engine_mode if engine_mode is not None
+                   else os.environ.get('RESYNC_ENGINE')) == 'next'
     if not shutil.which('ffmpeg'):
         raise RuntimeError('FFmpeg não encontrado. Instale com: brew install ffmpeg')
     available = [t['id'] for t in project.tracks()]
@@ -911,7 +937,7 @@ def sync(project: Project, reference_track: str = 'auto', media_folder: str = ''
         with progress_lock:
             progress(percent, message)
 
-    cache = AudioCache(lambda msg: report(-1, msg))
+    cache = AudioCache(lambda msg: report(-1, msg), next_engine=next_engine)
     locate_media(project, media_folder, lambda msg: progress(-1, msg))
     project._export_cache = None
     groups = project.groups
@@ -1009,10 +1035,33 @@ def sync(project: Project, reference_track: str = 'auto', media_folder: str = ''
     edges = []
     comparisons = 0
     identity_rejected = set()
-    eligible = [(a,b) for i,a in enumerate(groups) for b in groups[i+1:]
-                if independent(a,b) and features[a.gid] is not None and features[b.gid] is not None]
-    with correlation_session():
-        for i,(a,b) in enumerate(eligible):
+    usable = [g for g in groups if features[g.gid] is not None and g.path]
+    counts = defaultdict(int)
+    for g in usable:
+        counts[source_paths[g.gid]] += 1
+    total_pairs = (len(usable) ** 2 - sum(count ** 2 for count in counts.values())) // 2
+    def all_pairs():
+        return ((i, j) for i in range(len(usable)) for j in range(i + 1, len(usable))
+                if independent(usable[i], usable[j]))
+
+    indexed = None
+    progress(20, 'Buscando alinhamentos no áudio...')
+    if next_engine:
+        from sparse_match import sparse_candidates
+        coarse = [features[g.gid] for g in usable]
+        indexed = sparse_candidates(coarse, [cache.verification_features(f) for f in coarse])
+        if indexed is not None:
+            indexed = [pair for pair in indexed if independent(usable[pair[0]], usable[pair[1]])]
+            if not indexed:
+                indexed = None
+
+    indexed_count = 0
+    fallback_count = 0
+    def compare(pairs, limit, start_progress, end_progress, label):
+        nonlocal comparisons
+        verified_ids = set()
+        for i,(a_idx,b_idx) in enumerate(pairs):
+            a,b = usable[a_idx],usable[b_idx]
             answer = correlate_features(features[a.gid], features[b.gid])
             comparisons += 1
             if answer is not None:
@@ -1026,11 +1075,34 @@ def sync(project: Project, reference_track: str = 'auto', media_folder: str = ''
                     weight = score + min(0.08, 0.018 * math.log1p(length / 6))
                     if confirm_audio_identity(cache, features[a.gid], features[b.gid], lag):
                         edges.append((weight, score, a.gid, b.gid, lag))
+                        if score >= max(threshold, .72) and unique >= .08:
+                            verified_ids.update((a_idx, b_idx))
                     else:
                         identity_rejected.update((a.gid, b.gid))
-            if i % 10 == 0 or i == len(eligible)-1:
-                progress(20 + int(50*(i+1)/max(1,len(eligible))),
-                         f'Comparando áudio entre todas as câmeras · {i+1}/{len(eligible)}')
+            if i % 10 == 0 or i == limit-1:
+                progress(start_progress + int((end_progress - start_progress)*(i+1)/max(1,limit)),
+                         f'{label} · {i+1}/{limit}')
+        return verified_ids
+
+    with correlation_session(next_engine=next_engine):
+        if indexed is None:
+            compare(all_pairs(), total_pairs, 20, 70, 'Comparando áudio entre as câmeras')
+        else:
+            indexed_count = len(indexed)
+            trusted = compare(indexed, indexed_count, 20, 48, 'Verificando candidatos de áudio')
+            examined = set(indexed)
+            # An absent key is not evidence that an overlap doesn't exist.
+            # Exhaustively retry every pair touching unconfirmed/weak takes.
+            # Also check continuous recordings against all takes; a missed
+            # bridge there can incorrectly split an otherwise valid session.
+            durations = np.asarray([len(features[g.gid]) for g in usable])
+            longer = set(np.flatnonzero(durations > 2 * np.median(durations)))
+            unresolved = (set(range(len(usable))) - trusted) | longer
+            if unresolved:
+                fallback = [(i,j) for i,j in all_pairs() if (i in unresolved or j in unresolved)
+                            and (i,j) not in examined]
+                fallback_count = len(fallback)
+                compare(fallback, fallback_count, 48, 70, 'Conferindo takes com evidência insuficiente')
 
     ids = [g.gid for g in groups]
     by_id = {g.gid:g for g in groups}
@@ -1091,6 +1163,33 @@ def sync(project: Project, reference_track: str = 'auto', media_folder: str = ''
         evidence[bid].append((aid,score))
 
     progress(81, 'Validando pares e alinhando os takes...')
+    offset_refits = 0
+    if next_engine:
+        from offset_fit import fit_offsets
+        component_edges = defaultdict(list)
+        for weight, _, aid, bid, lag in edges:
+            root = root_of(aid)
+            if root == root_of(bid):
+                component_edges[root].append((aid, bid, lag, weight))
+        for root, coords in components.items():
+            constraints = component_edges[root]
+            # Exact consensus needs no numerical solve. This is the common
+            # case for cameras sharing a clean recording.
+            if not any(abs((coords[b] - coords[a]) - lag) > .001
+                       for a,b,lag,_ in constraints):
+                continue
+            fitted = fit_offsets(coords, constraints, anchor=root)
+            if fitted == coords:
+                continue
+            # Do not promote a refit that overlaps two segments of one source
+            # or moves a previously verified pair out of its accepted window.
+            keys = list(fitted)
+            if (all(chrono_compatible({u: fitted[u]}, {v: fitted[v]})
+                    for i,u in enumerate(keys) for v in keys[i+1:])
+                    and all(abs((fitted[b] - fitted[a]) - (coords[b] - coords[a])) <= .12
+                            for a in coords for b, _ in evidence[a])):
+                coords.update(fitted)
+                offset_refits += 1
     # Build position-consistent verified components. Each take must have a
     # direct accepted edge to another independent recorded take.
     verified = [coords for coords in components.values() if len(coords) > 1]
@@ -1175,7 +1274,11 @@ def sync(project: Project, reference_track: str = 'auto', media_folder: str = ''
     failed_count=len(groups)-verified_count
     clip_status={id(c):g.status for g in groups for c in g.members}
     progress(100,f'{verified_count}/{len(groups)} takes com áudio confirmado · {failed_count} para revisão (vermelho)')
-    return {'synced':verified_count-base_count,'reference_groups':base_count,
+    diagnostics = ({'engine_mode': 'next', 'matching': {
+        'search': 'full' if indexed is None else 'indexed', 'indexed_pairs': indexed_count,
+        'fallback_pairs': fallback_count, 'total_pairs': total_pairs,
+        'offset_refits': offset_refits}} if next_engine else {})
+    return {**diagnostics, 'synced':verified_count-base_count,'reference_groups':base_count,
             'total':len(groups),'comparisons':comparisons,'missing':missing[:30],
             'collisions':collisions[:100],'reference':reference_track,
             'unmatched':failed_count,'isolated':isolated,
